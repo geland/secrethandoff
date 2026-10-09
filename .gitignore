@@ -1,0 +1,10 @@
+/packages/cli-go/dist/
+/packages/cli-go/secrethandoff
+/packages/cli-go/secrethandoff.exe
+.env*
+*.pem
+*.p12
+*.p8
+*.key
+*.tfstate*
+.DS_Store

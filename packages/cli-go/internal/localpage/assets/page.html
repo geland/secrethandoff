@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Secret Handoff</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/page.css">
+<script src="/page.js" defer></script>
+</head>
+<body>
+<div class="site">
+  <header class="masthead">
+    <span class="brand">
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M8 8h12v16h14l-8 12h-6v20H8V8Zm36 0h12v48H44V40H30l8-12h6V8Z"/>
+      </svg>
+      <span>Secret Handoff</span>
+    </span>
+    <span class="local-badge"><span class="dot" aria-hidden="true"></span>On this computer</span>
+  </header>
+
+  <main>
+    <p class="eyebrow"><span class="pulse" aria-hidden="true"></span><span id="eyebrow">Local request</span></p>
+    <h1 id="title">Loading…</h1>
+    <p id="status" class="status" role="status"></p>
+
+    <dl class="origin" id="origin" hidden>
+      <div><dt>Asked by</dt><dd id="agent"></dd></div>
+      <div><dt>Page served by</dt><dd id="served"></dd></div>
+    </dl>
+
+    <section id="fill" class="card" hidden>
+      <p class="label">Reason <span class="hint">written by the AI agent, not by Secret Handoff</span></p>
+      <blockquote id="reason"></blockquote>
+      <p class="label">Where the secret can go</p>
+      <p id="policy" class="policy"></p>
+      <p id="wildcard" class="warn" hidden>This policy uses a wildcard host. Any one subdomain of that host can receive the secret.</p>
+      <label for="value" class="label">Secret</label>
+      <input id="value" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">
+      <textarea id="value-multi" rows="6" autocomplete="off" spellcheck="false" hidden></textarea>
+      <div class="row">
+        <label class="check"><input id="multi" type="checkbox"> The secret has several lines (shown as you type)</label>
+        <button id="reveal" type="button" class="link">Show</button>
+      </div>
+      <div class="actions">
+        <button id="submit" type="button" class="primary">Give secret to agent <span aria-hidden="true">→</span></button>
+        <button id="decline" type="button" class="secondary">Decline</button>
+      </div>
+      <p class="note">The secret stays on this computer. The agent gets only its name and can use it only as the policy above allows.</p>
+      <div id="phone" hidden>
+        <button id="phone-start" type="button" class="link">Fill on my phone instead</button>
+        <div id="phone-panel" hidden>
+          <p class="label">Scan this code with your phone. Continue on the phone only if it shows this pairing code:</p>
+          <p id="pairing" class="pairing"></p>
+          <img id="qr" alt="QR code of the phone link" width="220" height="220">
+          <p class="note">The phone encrypts the secret for this program. The Secret Handoff service passes on only the encrypted copy and cannot read it.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="approve" class="card" hidden>
+      <p class="label">The AI agent wants to run this command with secrets in its environment</p>
+      <pre id="command"></pre>
+      <p class="label">Folder</p>
+      <p id="dir" class="mono"></p>
+      <p class="label">Secrets the command receives</p>
+      <p id="secrets" class="mono"></p>
+      <p class="warn">The command runs outside the agent's sandbox, and it can read these secrets. Approve only a command you understand.</p>
+      <div class="actions">
+        <button id="allow" type="button" class="primary">Run this command once <span aria-hidden="true">→</span></button>
+        <button id="deny" type="button" class="secondary">Deny</button>
+      </div>
+    </section>
+
+    <section id="after" class="card" hidden>
+      <p id="after-text"></p>
+      <button id="notme" type="button" class="secondary" hidden>This was not me</button>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>What you type here does not go to the chat, the AI model, or secrethandoff.com.</strong> The secrethandoff program on this computer keeps it in memory until the agent session ends.</p>
+    <p id="isolated" hidden>Secret Handoff opened this page in a separate browser window with a temporary profile and no extensions, so AI browser extensions cannot read it. The window closes when the agent session ends.</p>
+    <p>Check the address bar: a local request always starts with <span class="mono">http://127.0.0.1</span> and opens by itself when your agent asks. Do not enter a secret on a look-alike page at any other address.</p>
+  </footer>
+</div>
+</body>
+</html>

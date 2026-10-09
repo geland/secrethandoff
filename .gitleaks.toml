@@ -1,0 +1,14 @@
+# Extend all built-in rules. These exact synthetic fixtures and a digest-only
+# manifest were manually reviewed; no blanket exemption for test files.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed synthetic fixtures and SHA-256 source inventory"
+regexTarget = "match"
+paths = ['(^|/)SOURCE-SNAPSHOT\.json$']
+regexes = [
+  'correct-horse-battery-staple-9f3k',
+  'sk_test_51Hx9ZqLkJv8Q2wE7rT5yU3iO1pA0sD',
+  '(?i)api\.stripe\.com:8443/v1/charges',
+]
