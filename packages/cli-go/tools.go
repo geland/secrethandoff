@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,52 @@ import (
 // secrets held now (AGENTS.md: no secret value in any tool result).
 func (s *session) text(isError bool, format string, args ...any) *mcp.CallToolResult {
 	msg, _ := s.store.Redactor().String(fmt.Sprintf(format, args...))
-	return &mcp.CallToolResult{IsError: isError, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}
+	r := &mcp.CallToolResult{IsError: isError, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}
+	if isError {
+		r.StructuredContent = map[string]any{"status": "error", "message": msg}
+	}
+	return r
+}
+
+// structured applies the same redaction to metadata as to compatibility text.
+// Never attach the original object after redaction or a failed JSON decode.
+func structured(r *mcp.CallToolResult, value any, redactor *secrets.Redactor) *mcp.CallToolResult {
+	b, err := metadataJSON(value)
+	if err != nil {
+		return r
+	}
+	clean, _ := redactor.String(string(b))
+	var safe map[string]any
+	if json.Unmarshal([]byte(clean), &safe) == nil {
+		r.StructuredContent = safe
+	}
+	return r
+}
+
+// Match secrets.JSONEscape exactly before redaction. HTML escaping would
+// hide a value containing <, >, or & from the redactor, then reveal it when
+// the client decodes structuredContent or the list's JSON text.
+func metadataJSON(value any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	err := enc.Encode(value)
+	return b.Bytes(), err
+}
+
+func (s *session) lifecycle(status, name, presentation, format string, args ...any) *mcp.CallToolResult {
+	r := s.text(status == "error", format, args...)
+	out := map[string]any{"status": status, "name": name}
+	if presentation != "" {
+		out["presentation"] = presentation
+	}
+	if status == "pending" {
+		out["next_tool"] = "wait_for_secret"
+		out["next_arguments"] = map[string]any{"name": name}
+	} else if status == "confirmation_required" {
+		out["next_tool"] = "confirm_secret"
+	}
+	return structured(r, out, s.store.Redactor())
 }
 
 type policyInput struct {
@@ -43,20 +89,23 @@ type nameInput struct {
 
 func addSecretTools(server *mcp.Server, s *session) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "request_secret",
-		Meta: appcard.ToolMeta(),
-		Description: "Ask the user for a credential through a page in their browser. The value never enters the conversation. " +
-			"Returns when the secret is ready to use by name, or tells you to call again to keep waiting. " +
-			"Calling again with the same name and policy rejoins the open request.",
+		Name:        "request_secret",
+		Meta:        appcard.ToolMeta(),
+		Description: "Request a credential with a name and policy. Reports status and presentation; repeated calls with the same name and policy rejoin the request.",
 	}, s.requestSecret)
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "wait_for_secret",
+		Meta:        appcard.ToolMeta(),
+		Description: "Wait for an existing request by name. Cannot open a page or change policy. Returns lifecycle state within the configured timeout.",
+	}, s.waitForSecret)
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_secrets",
-		Description: "List the secrets that are ready, with their policies, and the requests that are still open. Never returns values.",
+		Description: "List ready secret metadata and pending requests, including remote confirmation.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.listSecrets)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "forget_secret",
-		Description: "Erase a secret from memory. Use it when the task no longer needs the secret.",
+		Description: "Erase a named secret and cancel its open request. Returns forgotten or missing.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true},
 	}, s.forgetSecret)
 	addHTTPTool(server, s)
@@ -104,6 +153,9 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 	s.mu.Lock()
 	fr := s.fills[in.Name]
 	if fr != nil && (fr.policyHash != p.Hash() || fr.req.State() != localpage.Pending) {
+		// A name has one current request. Superseded pages must not refill it
+		// later or invoke a rejection callback against its replacement.
+		fr.req.Cancel()
 		fr = nil
 	}
 	if fr == nil {
@@ -127,6 +179,10 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 	}
 	s.mu.Unlock()
 
+	return s.waitLocal(ctx, in.Name, fr), nil, nil
+}
+
+func (s *session) waitLocal(ctx context.Context, name string, fr *fillRequest) *mcp.CallToolResult {
 	select {
 	case <-fr.req.Done():
 	case <-time.After(s.wait):
@@ -134,47 +190,122 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 	}
 	switch fr.req.State() {
 	case localpage.Filled:
-		return s.ready(in.Name, p), nil, nil
+		if !s.store.Has(name) {
+			return s.lifecycle("forgotten", name, "browser_page", "%s is no longer available.", name)
+		}
+		return s.ready(name, fr.req.Policy)
 	case localpage.Pending:
-		return s.text(false, "Waiting for the user to fill %s on the page that opened in their browser. "+
-			"Call request_secret again with the same name and policy to keep waiting. Do not ask for the secret in chat.", in.Name), nil, nil
+		return s.lifecycle("pending", name, "browser_page", "Waiting for the user to fill %s on the Secret Handoff page in their browser. Call wait_for_secret with this name to keep waiting.", name)
 	case localpage.Declined:
-		return s.text(false, "The user declined to give %s. Do not ask for it in chat. Ask the user how they want to continue.", in.Name), nil, nil
+		return s.lifecycle("declined", name, "browser_page", "The user declined to give %s. Do not ask for it in chat. Ask the user how they want to continue.", name)
 	case localpage.Rejected:
-		return s.text(false, "The user cancelled the request for %s. Any value was discarded. Do not ask for it in chat.", in.Name), nil, nil
+		return s.lifecycle("cancelled", name, "browser_page", "The request for %s was cancelled. Any value was discarded. Do not ask for it in chat.", name)
 	default:
-		return s.text(false, "The request for %s expired. Call request_secret again if the task still needs it.", in.Name), nil, nil
+		return s.lifecycle("expired", name, "browser_page", "The request for %s expired. Call request_secret again if the task still needs it.", name)
 	}
 }
 
+func (s *session) waitForSecret(ctx context.Context, _ *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
+	if !secrets.NamePattern.MatchString(in.Name) {
+		return s.text(true, "Invalid secret name."), nil, nil
+	}
+	s.mu.Lock()
+	fr, rr := s.fills[in.Name], s.remotes[in.Name]
+	s.mu.Unlock()
+	if rr != nil {
+		return s.waitRemote(ctx, in.Name, rr), nil, nil
+	}
+	if fr != nil {
+		return s.waitLocal(ctx, in.Name, fr), nil, nil
+	}
+	for _, info := range s.store.List() {
+		if info.Name == in.Name {
+			return s.ready(in.Name, info.Policy), nil, nil
+		}
+	}
+	return s.lifecycle("missing", in.Name, "", "There is no request or secret named %s. Call request_secret if the task needs it.", in.Name), nil, nil
+}
+
 func (s *session) ready(name string, p policy.Policy) *mcp.CallToolResult {
-	return s.text(false, "%s is ready. %s Use it with http_request by writing {{secret:%s}} in a header, the URL query, or the body. "+
+	s.mu.Lock()
+	presentation := ""
+	if s.fills[name] != nil {
+		presentation = "browser_page"
+	} else if rr := s.remotes[name]; rr != nil {
+		rr.mu.Lock()
+		presentation = rr.presentation
+		rr.mu.Unlock()
+	}
+	s.mu.Unlock()
+	return s.lifecycle("ready", name, presentation, "%s is ready. %s Use it with http_request by writing {{secret:%s}} in a header, the URL query, or the body. "+
 		"Use run_with_secret only when a command must read it from its environment.", name, p.Describe(), name)
 }
 
 func (s *session) listSecrets(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 	type pendingInfo struct {
-		Name string `json:"name"`
+		Name         string `json:"name"`
+		Status       string `json:"status"`
+		Presentation string `json:"presentation"`
 	}
 	out := struct {
+		Status  string         `json:"status"`
 		Ready   []secrets.Info `json:"ready"`
 		Pending []pendingInfo  `json:"pending"`
-	}{Ready: s.store.List(), Pending: []pendingInfo{}}
+	}{Status: "listed", Ready: s.store.List(), Pending: []pendingInfo{}}
 	s.mu.Lock()
 	for name, fr := range s.fills {
 		if fr.req.State() == localpage.Pending {
-			out.Pending = append(out.Pending, pendingInfo{Name: name})
+			out.Pending = append(out.Pending, pendingInfo{Name: name, Status: "pending", Presentation: "browser_page"})
 		}
 	}
+	for name, rr := range s.remotes {
+		rr.mu.Lock()
+		if !rr.done && rr.failed == "" {
+			status := "pending"
+			if rr.value != nil {
+				status = "confirmation_required"
+			}
+			out.Pending = append(out.Pending, pendingInfo{Name: name, Status: status, Presentation: rr.presentation})
+		}
+		rr.mu.Unlock()
+	}
 	s.mu.Unlock()
-	b, _ := json.Marshal(out)
-	return s.text(false, "%s", b), nil, nil
+	b, _ := metadataJSON(out)
+	return structured(s.text(false, "%s", b), out, s.store.Redactor()), nil, nil
 }
 
-func (s *session) forgetSecret(_ context.Context, _ *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
-	s.dropRemote(in.Name)
-	if !s.store.Forget(in.Name) {
-		return s.text(false, "There is no secret named %s.", in.Name), nil, nil
+func (s *session) forgetSecret(ctx context.Context, _ *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
+	if !secrets.NamePattern.MatchString(in.Name) {
+		return s.text(true, "Invalid secret name."), nil, nil
 	}
-	return s.text(false, "%s is erased from memory.", in.Name), nil, nil
+	s.mu.Lock()
+	fr, rr := s.fills[in.Name], s.remotes[in.Name]
+	delete(s.fills, in.Name)
+	delete(s.remotes, in.Name)
+	if fr != nil {
+		fr.req.Cancel()
+	}
+	if rr != nil {
+		rr.mu.Lock()
+		rr.failed = "cancelled"
+		wipe(rr.value)
+		rr.value = nil
+		rr.mu.Unlock()
+	}
+	// Snapshot after any in-flight fill finishes, before erasing its value.
+	redactor := s.store.Redactor()
+	status, message := "forgotten", fmt.Sprintf("%s is erased from memory. Its open request was cancelled.", in.Name)
+	if !s.store.Forget(in.Name) && fr == nil && rr == nil {
+		status, message = "missing", fmt.Sprintf("There is no secret named %s.", in.Name)
+	}
+	s.mu.Unlock()
+	if rr != nil {
+		// Local erasure succeeds even when the relay is unreachable. The relay
+		// still enforces its original expiry if cancellation cannot reach it.
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = rr.client.Cancel(cctx, rr.req)
+		cancel()
+	}
+	message, _ = redactor.String(message)
+	return structured(s.text(false, "%s", message), map[string]any{"status": status, "name": in.Name}, redactor), nil, nil
 }

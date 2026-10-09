@@ -24,25 +24,40 @@ const maxConfirmAttempts = 5
 // waits here, apart from the ready secrets, until the human's confirmation
 // code arrives. The binary never tells the agent the expected code.
 type remoteRequest struct {
-	mu         sync.Mutex
-	client     *relay.Client
-	req        *relay.Request
-	policy     policy.Policy
-	policyHash string
-	value      []byte
-	expected   string
-	attempts   int
-	done       bool
-	failed     string
+	mu           sync.Mutex
+	poll         chan struct{}
+	client       *relay.Client
+	req          *relay.Request
+	policy       policy.Policy
+	policyHash   string
+	value        []byte
+	expected     string
+	attempts     int
+	done         bool
+	failed       string
+	presentation string
 }
 
 func (s *session) remoteRequestSecret(ctx context.Context, call *mcp.CallToolRequest, name, reason string, p policy.Policy, ttl time.Duration) *mcp.CallToolResult {
 	s.mu.Lock()
 	rr := s.remotes[name]
+	var superseded *remoteRequest
 	if rr != nil && rr.policyHash != p.Hash() {
+		superseded = rr
+		delete(s.remotes, name)
+		rr.mu.Lock()
+		rr.failed = "cancelled"
+		wipe(rr.value)
+		rr.value = nil
+		rr.mu.Unlock()
 		rr = nil
 	}
 	s.mu.Unlock()
+	if superseded != nil {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = superseded.client.Cancel(cctx, superseded.req)
+		cancel()
+	}
 
 	if rr == nil {
 		client, err := relay.NewClient(s.relayURL)
@@ -63,17 +78,20 @@ func (s *session) remoteRequestSecret(ctx context.Context, call *mcp.CallToolReq
 		if err != nil {
 			return s.text(true, "This computer has no browser, and the phone relay is not available: %v", err)
 		}
-		rr = &remoteRequest{client: client, req: r, policy: p, policyHash: p.Hash()}
+		rr = &remoteRequest{client: client, req: r, policy: p, policyHash: p.Hash(), presentation: "remote_link", poll: make(chan struct{}, 1)}
 		s.mu.Lock()
 		s.remotes[name] = rr
 		s.mu.Unlock()
 
 		link, code := r.Link(s.relayURL), relay.PairingCode(r.PublicKey())
 		if res := s.elicitURL(ctx, call, name, reason, link, code); res != nil {
+			rr.mu.Lock()
+			rr.presentation = "client_prompt"
+			rr.mu.Unlock()
 			return res
 		}
-		return s.text(false, "This computer has no browser. Ask the user to open this link on their phone or another computer, and to continue only if the page shows the pairing code %s:\n%s\n\n"+
-			"Then call request_secret again with the same name and policy to wait. Do not ask for the secret in chat.", code, link)
+		return s.lifecycle("pending", name, "remote_link", "This computer has no browser. Ask the user to open this link on their phone or another computer, and to continue only if the page shows the pairing code %s:\n%s\n\n"+
+			"Then call wait_for_secret with this name to wait. Do not ask for the secret in chat.", code, link)
 	}
 	return s.waitRemote(ctx, name, rr)
 }
@@ -96,8 +114,8 @@ func (s *session) elicitURL(ctx context.Context, call *mcp.CallToolRequest, name
 		URL:           link,
 		ElicitationID: code,
 	}
-	waiting := s.text(false, "The user's agent client is showing a page to give %s, with pairing code %s. "+
-		"Call request_secret again with the same name and policy to wait for it. Do not ask for the secret in chat.", name, code)
+	waiting := s.lifecycle("pending", name, "client_prompt", "The user's agent client is showing a page to give %s, with pairing code %s. "+
+		"Call wait_for_secret with this name to wait for it. Do not ask for the secret in chat.", name, code)
 	// From protocol 2026-07-28, a server returns input requests in the
 	// result (multi round-trip, SEP-2322). The client shows the page and
 	// retries the call, which rejoins this request.
@@ -114,19 +132,38 @@ func (s *session) elicitURL(ctx context.Context, call *mcp.CallToolRequest, name
 }
 
 func (s *session) waitRemote(ctx context.Context, name string, rr *remoteRequest) *mcp.CallToolResult {
+	// The budget includes time queued behind another waiter and relay I/O.
+	ctx, stop := context.WithTimeout(ctx, s.wait)
+	defer stop()
+	// Only one call may pick up a remote ciphertext at a time.
+	select {
+	case rr.poll <- struct{}{}:
+		defer func() { <-rr.poll }()
+	case <-ctx.Done():
+		rr.mu.Lock()
+		presentation := rr.presentation
+		rr.mu.Unlock()
+		return s.lifecycle("pending", name, presentation, "Waiting for the user to fill %s on their other device. Call wait_for_secret with this name to keep waiting.", name)
+	}
 	deadline := time.Now().Add(s.wait)
 	for {
 		rr.mu.Lock()
-		done, failed, hasValue := rr.done, rr.failed, rr.value != nil
+		done, failed, hasValue, presentation := rr.done, rr.failed, rr.value != nil, rr.presentation
 		rr.mu.Unlock()
 		switch {
+		case failed != "":
+			s.dropRemoteIf(name, rr)
+			status := "error"
+			if failed == "cancelled" {
+				status = "cancelled"
+			} else if strings.Contains(failed, "expired") {
+				status = "expired"
+			}
+			return s.lifecycle(status, name, presentation, "The request for %s ended: %s. Call request_secret again if the task still needs it.", name, failed)
 		case done:
 			return s.ready(name, rr.policy)
-		case failed != "":
-			s.dropRemote(name)
-			return s.text(false, "The request for %s ended: %s. Call request_secret again if the task still needs it.", name, failed)
 		case hasValue:
-			return s.text(false, "The user filled %s. Before you use it, ask the user for the confirmation code that their page showed after they sent the secret, "+
+			return s.lifecycle("confirmation_required", name, presentation, "The user filled %s. Before you use it, ask the user for the confirmation code that their page showed after they sent the secret, "+
 				"then call confirm_secret with that code. Do not guess the code.", name)
 		}
 		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -135,17 +172,26 @@ func (s *session) waitRemote(ctx context.Context, name string, rr *remoteRequest
 		switch {
 		case err == nil:
 			rr.mu.Lock()
-			rr.value, rr.expected = value, code
+			if rr.failed != "" {
+				wipe(value)
+			} else {
+				rr.value, rr.expected = value, code
+			}
 			rr.mu.Unlock()
 			continue
 		case !errors.Is(err, relay.ErrPending):
+			if ctx.Err() != nil {
+				return s.lifecycle("pending", name, presentation, "Waiting for the user to fill %s on their other device. Call wait_for_secret with this name to keep waiting.", name)
+			}
 			rr.mu.Lock()
-			rr.failed = err.Error()
+			if rr.failed == "" {
+				rr.failed = err.Error()
+			}
 			rr.mu.Unlock()
 			continue
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return s.text(false, "Waiting for the user to fill %s. Call request_secret again with the same name and policy to keep waiting. Do not ask for the secret in chat.", name)
+			return s.lifecycle("pending", name, presentation, "Waiting for the user to fill %s on their other device. Call wait_for_secret with this name to keep waiting. Do not ask for the secret in chat.", name)
 		}
 		select {
 		case <-time.After(2 * time.Second):
@@ -155,12 +201,22 @@ func (s *session) waitRemote(ctx context.Context, name string, rr *remoteRequest
 }
 
 func (s *session) dropRemote(name string) {
+	s.dropRemoteIf(name, nil)
+}
+
+// A waiter for an old request must never remove a replacement of that name.
+func (s *session) dropRemoteIf(name string, expected *remoteRequest) {
 	s.mu.Lock()
 	rr := s.remotes[name]
+	if expected != nil && rr != expected {
+		s.mu.Unlock()
+		return
+	}
 	delete(s.remotes, name)
 	s.mu.Unlock()
 	if rr != nil {
 		rr.mu.Lock()
+		rr.failed = "cancelled"
 		wipe(rr.value)
 		rr.value = nil
 		rr.mu.Unlock()

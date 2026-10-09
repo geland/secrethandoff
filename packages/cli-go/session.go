@@ -24,6 +24,9 @@ type session struct {
 	// wait bounds how long one tool call waits for the human. Some agent
 	// clients time out tool calls after 60 seconds.
 	wait time.Duration
+	// commandApproval is configured by the owner when starting the server,
+	// never by a tool argument. Browser approval remains the default.
+	commandApproval string
 
 	pagesOnce sync.Once
 	pages     *localpage.Server
@@ -52,15 +55,16 @@ func newSession() *session {
 		wait = time.Duration(v) * time.Second
 	}
 	return &session{
-		store:     secrets.NewStore(),
-		open:      browser.Open,
-		available: browser.Available,
-		client:    newHTTPClient(nil),
-		relayURL:  relayURLFromEnv(),
-		wait:      wait,
-		fills:     map[string]*fillRequest{},
-		approvals: map[string]*localpage.Request{},
-		remotes:   map[string]*remoteRequest{},
+		store:           secrets.NewStore(),
+		open:            browser.Open,
+		available:       browser.Available,
+		client:          newHTTPClient(nil),
+		relayURL:        relayURLFromEnv(),
+		wait:            wait,
+		commandApproval: os.Getenv("SECRETHANDOFF_COMMAND_APPROVAL"),
+		fills:           map[string]*fillRequest{},
+		approvals:       map[string]*localpage.Request{},
+		remotes:         map[string]*remoteRequest{},
 	}
 }
 

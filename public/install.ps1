@@ -1,5 +1,5 @@
 # Installs the secrethandoff binary for AI agents into your user profile,
-# then installs the agent plugin in Claude Code and Codex if they are on PATH.
+# with MCP connection instructions at https://secrethandoff.com/download.
 # No administrator rights are needed.
 #
 #   irm https://secrethandoff.com/install.ps1 | iex
@@ -7,8 +7,8 @@
 # Settings: $env:SECRETHANDOFF_VERSION (default: latest),
 # $env:SECRETHANDOFF_REPO (default: geland/secrethandoff),
 # $env:SECRETHANDOFF_BIN_DIR (default: LocalAppData\Programs\secrethandoff),
-# $env:SECRETHANDOFF_NO_SETUP=1 (install the binary only),
-# $env:SECRETHANDOFF_MARKETPLACE (plugin source for setup: owner/repo or a folder).
+# $env:SECRETHANDOFF_NO_SETUP=1 (skip plugin setup even with a marketplace),
+# $env:SECRETHANDOFF_MARKETPLACE (optional plugin source: owner/repo or a folder).
 $ErrorActionPreference = 'Stop'
 
 $repo = if ($env:SECRETHANDOFF_REPO) { $env:SECRETHANDOFF_REPO } else { 'geland/secrethandoff' }
@@ -38,7 +38,7 @@ try {
   # The binary owns installation, user PATH, and agent setup on every OS.
   $setupArgs = @('setup', '--no-init')
   if ($env:SECRETHANDOFF_BIN_DIR) { $setupArgs += @('--bin-dir', $env:SECRETHANDOFF_BIN_DIR) }
-  if ($env:SECRETHANDOFF_NO_SETUP) { $setupArgs += '--binary-only' }
+  if ($env:SECRETHANDOFF_NO_SETUP -or -not $env:SECRETHANDOFF_MARKETPLACE) { $setupArgs += '--binary-only' }
   if ($env:SECRETHANDOFF_MARKETPLACE) { $setupArgs += @('--marketplace', $env:SECRETHANDOFF_MARKETPLACE) }
   & (Join-Path $work 'secrethandoff.exe') @setupArgs
   if ($LASTEXITCODE -ne 0) { throw "Secret Handoff setup needs attention (exit $LASTEXITCODE). Review the checks above." }

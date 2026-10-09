@@ -21,16 +21,25 @@ import (
 // fakeRelay accepts one request and returns a ciphertext once the test
 // "phone" sets one.
 type fakeRelay struct {
-	mu      sync.Mutex
-	srv     *httptest.Server
-	created map[string]any
-	ct      string
-	id      string
+	mu           sync.Mutex
+	srv          *httptest.Server
+	created      map[string]any
+	ct           string
+	id           string
+	beforePickup func()
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
 	f := &fakeRelay{id: "REMOTEREMOTEREMOTER001"}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/pickup") {
+			f.mu.Lock()
+			hook := f.beforePickup
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		switch {
@@ -160,4 +169,120 @@ func TestRemoteModeURLElicitation(t *testing.T) {
 	if strings.Contains(out, "#v1.") || !(strings.Contains(out, "showing a page") || strings.Contains(out, "Waiting for the user")) {
 		t.Fatalf("tool result: %s", out)
 	}
+}
+
+func TestWaitForRemoteSecretAndStructuredStates(t *testing.T) {
+	f, fr := remoteFixture(t, nil)
+	out, _ := f.call("request_secret", map[string]any{"name": "CLOUD_KEY", "reason": "Cloud test", "policy": stripePolicy})
+	code := fr.fillFromPhone(t, linkIn(out), testSecret)
+	data := f.lifecycleCall("wait_for_secret", map[string]any{"name": "CLOUD_KEY"}, "confirmation_required")
+	if data["presentation"] != "remote_link" || data["next_tool"] != "confirm_secret" {
+		t.Fatalf("remote metadata: %v", data)
+	}
+	listed := f.lifecycleCall("list_secrets", nil, "listed")
+	pending := listed["pending"].([]any)
+	if len(pending) != 1 || pending[0].(map[string]any)["status"] != "confirmation_required" {
+		t.Fatalf("remote listing: %v", listed)
+	}
+	if f.s.store.Has("CLOUD_KEY") {
+		t.Fatal("wait bypassed confirmation")
+	}
+	f.lifecycleCall("confirm_secret", map[string]any{"name": "CLOUD_KEY", "code": code}, "ready")
+	f.lifecycleCall("wait_for_secret", map[string]any{"name": "CLOUD_KEY"}, "ready")
+	f.lifecycleCall("forget_secret", map[string]any{"name": "CLOUD_KEY"}, "forgotten")
+	for _, out := range f.outputs {
+		if strings.Contains(out, code) {
+			t.Fatal("structured result revealed the confirmation code")
+		}
+	}
+	f.assertNoLeak()
+}
+
+func TestForgetRemoteDuringPickupDoesNotRestoreValue(t *testing.T) {
+	f, fr := remoteFixture(t, nil)
+	out, _ := f.call("request_secret", map[string]any{"name": "CLOUD_KEY", "reason": "Cloud test", "policy": stripePolicy})
+	fr.fillFromPhone(t, linkIn(out), testSecret)
+	started, release := make(chan struct{}), make(chan struct{})
+	fr.mu.Lock()
+	fr.beforePickup = func() { close(started); <-release }
+	fr.mu.Unlock()
+	f.s.mu.Lock()
+	rr := f.s.remotes["CLOUD_KEY"]
+	f.s.mu.Unlock()
+	finished := make(chan *mcp.CallToolResult, 1)
+	go func() { finished <- f.s.waitRemote(f.ctx, "CLOUD_KEY", rr) }()
+	<-started
+	f.lifecycleCall("forget_secret", map[string]any{"name": "CLOUD_KEY"}, "forgotten")
+	close(release)
+	res := <-finished
+	if res.StructuredContent.(map[string]any)["status"] != "cancelled" {
+		t.Fatalf("late pickup: %v", res)
+	}
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if rr.value != nil || f.s.store.Has("CLOUD_KEY") {
+		t.Fatal("late pickup restored a forgotten value")
+	}
+}
+
+func TestRemoteWaitCancellationKeepsRequest(t *testing.T) {
+	f, _ := remoteFixture(t, nil)
+	f.call("request_secret", map[string]any{"name": "CLOUD_KEY", "reason": "Cloud test", "policy": stripePolicy})
+	f.s.mu.Lock()
+	rr := f.s.remotes["CLOUD_KEY"]
+	f.s.mu.Unlock()
+	ctx, cancel := context.WithCancel(f.ctx)
+	cancel()
+	res := f.s.waitRemote(ctx, "CLOUD_KEY", rr)
+	if res.StructuredContent.(map[string]any)["status"] != "pending" {
+		t.Fatalf("cancelled wait: %v", res)
+	}
+	f.s.mu.Lock()
+	kept := f.s.remotes["CLOUD_KEY"] == rr
+	f.s.mu.Unlock()
+	if !kept {
+		t.Fatal("tool cancellation removed the human's request")
+	}
+}
+
+func TestOldRemoteWaiterCannotRemoveReplacement(t *testing.T) {
+	f, _ := remoteFixture(t, nil)
+	args := map[string]any{"name": "CLOUD_KEY", "reason": "Cloud test", "policy": stripePolicy}
+	f.call("request_secret", args)
+	f.s.mu.Lock()
+	old := f.s.remotes["CLOUD_KEY"]
+	f.s.mu.Unlock()
+	f.lifecycleCall("forget_secret", map[string]any{"name": "CLOUD_KEY"}, "forgotten")
+	f.call("request_secret", args)
+	f.s.mu.Lock()
+	replacement := f.s.remotes["CLOUD_KEY"]
+	f.s.mu.Unlock()
+	res := f.s.waitRemote(f.ctx, "CLOUD_KEY", old)
+	if res.StructuredContent.(map[string]any)["status"] != "cancelled" {
+		t.Fatalf("old waiter: %v", res)
+	}
+	f.s.mu.Lock()
+	kept := f.s.remotes["CLOUD_KEY"] == replacement
+	f.s.mu.Unlock()
+	if !kept {
+		t.Fatal("an old waiter removed the replacement request")
+	}
+}
+
+func TestSupersededRemoteRequestDiscardsUnconfirmedValue(t *testing.T) {
+	f, fr := remoteFixture(t, nil)
+	out, _ := f.call("request_secret", map[string]any{"name": "CLOUD_KEY", "reason": "Cloud test", "policy": stripePolicy})
+	fr.fillFromPhone(t, linkIn(out), testSecret)
+	f.lifecycleCall("wait_for_secret", map[string]any{"name": "CLOUD_KEY"}, "confirmation_required")
+	f.s.mu.Lock()
+	old := f.s.remotes["CLOUD_KEY"]
+	f.s.mu.Unlock()
+	f.call("request_secret", map[string]any{"name": "CLOUD_KEY", "reason": "Replace policy", "policy": map[string]any{"hosts": []string{"api.github.com"}}})
+	old.mu.Lock()
+	discarded := old.value == nil && old.failed == "cancelled"
+	old.mu.Unlock()
+	if !discarded {
+		t.Fatal("superseded request retained an unconfirmed value")
+	}
+	f.assertNoLeak()
 }

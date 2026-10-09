@@ -1,6 +1,6 @@
 #!/bin/sh
-# Installs the secrethandoff binary for AI agents into ~/.local/bin, then
-# installs the agent plugin in Claude Code and Codex if they are on PATH.
+# Installs the secrethandoff binary for AI agents into ~/.local/bin.
+# Connect your MCP client using https://secrethandoff.com/download.
 # No administrator rights are needed.
 #
 #   curl -fsSL https://secrethandoff.com/install.sh | sh
@@ -8,8 +8,8 @@
 # Settings: SECRETHANDOFF_VERSION (default: latest),
 # SECRETHANDOFF_BIN_DIR (default: ~/.local/bin),
 # SECRETHANDOFF_REPO (default: geland/secrethandoff),
-# SECRETHANDOFF_NO_SETUP=1 (install the binary only),
-# SECRETHANDOFF_MARKETPLACE (plugin source for setup: owner/repo or a folder).
+# SECRETHANDOFF_NO_SETUP=1 (skip plugin setup even with a marketplace),
+# SECRETHANDOFF_MARKETPLACE (optional plugin source: owner/repo or a folder).
 set -eu
 
 repo="${SECRETHANDOFF_REPO:-geland/secrethandoff}"
@@ -62,7 +62,7 @@ tar -xzf "$work/$name" -C "$work" secrethandoff
 # The native binary owns installation, PATH, and agent setup on every OS.
 # A piped bootstrap must never read project consent from its script input.
 set -- setup --no-init --bin-dir "$bin_dir"
-if [ -n "${SECRETHANDOFF_NO_SETUP:-}" ]; then
+if [ -n "${SECRETHANDOFF_NO_SETUP:-}" ] || [ -z "${SECRETHANDOFF_MARKETPLACE:-}" ]; then
   set -- "$@" --binary-only
 fi
 if [ -n "${SECRETHANDOFF_MARKETPLACE:-}" ]; then
