@@ -70,6 +70,21 @@ func (s *Store) Use(name string, fn func(value []byte, p policy.Policy) error) e
 	return fn(e.value, e.info.Policy)
 }
 
+// UseWithRedactor snapshots the exact value passed to fn before it can be
+// replaced or forgotten. fn must finish promptly and must not call Store methods.
+// The caller owns redactor; it must not share it with another goroutine.
+func (s *Store) UseWithRedactor(name string, redactor *Redactor, fn func(value []byte, p policy.Policy) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.items[name]
+	if !ok {
+		return fmt.Errorf("no secret named %q; call request_secret first", name)
+	}
+	redactor.add(name, e.value)
+	redactor.sort()
+	return fn(e.value, e.info.Policy)
+}
+
 // Has reports whether a secret with this name is filled.
 func (s *Store) Has(name string) bool {
 	s.mu.RLock()

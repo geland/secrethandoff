@@ -20,10 +20,12 @@ func TestBootstrapDelegatesAndPropagatesFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name, setupExit    string
 		binaryOnly, tamper bool
+		marketplace        bool
 		wantCode           int
 	}{
-		{"success", "0", false, false, 0}, {"binary-only", "0", true, false, 0},
-		{"setup-failure", "7", false, false, 7}, {"bad-checksum", "0", false, true, 1},
+		{"default-binary-only", "0", true, false, false, 0},
+		{"marketplace", "0", false, false, true, 0}, {"binary-only", "0", true, false, true, 0},
+		{"setup-failure", "7", false, false, true, 7}, {"bad-checksum", "0", false, true, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -57,8 +59,11 @@ case "$url" in */SHA256SUMS) cp "$FAKE_FIXTURE/SHA256SUMS" "$dest" ;; *) cp "$FA
 			script, _ := filepath.Abs(filepath.Join("..", "..", "public", "install.sh"))
 			cmd := exec.Command("/bin/sh", script)
 			log := filepath.Join(dir, "calls")
-			cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "SECRETHANDOFF_VERSION=0.0.1", "SECRETHANDOFF_DOWNLOAD_URL=https://fixture.invalid/release", "SECRETHANDOFF_BIN_DIR=" + filepath.Join(dir, "destination with spaces"), "SECRETHANDOFF_MARKETPLACE=owner/repo", "FAKE_FIXTURE=" + dir, "FAKE_CALL_LOG=" + log, "FAKE_SETUP_EXIT=" + tc.setupExit}
-			if tc.binaryOnly {
+			cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "SECRETHANDOFF_VERSION=0.0.1", "SECRETHANDOFF_DOWNLOAD_URL=https://fixture.invalid/release", "SECRETHANDOFF_BIN_DIR=" + filepath.Join(dir, "destination with spaces"), "FAKE_FIXTURE=" + dir, "FAKE_CALL_LOG=" + log, "FAKE_SETUP_EXIT=" + tc.setupExit}
+			if tc.marketplace {
+				cmd.Env = append(cmd.Env, "SECRETHANDOFF_MARKETPLACE=owner/repo")
+			}
+			if tc.binaryOnly && tc.marketplace {
 				cmd.Env = append(cmd.Env, "SECRETHANDOFF_NO_SETUP=1")
 			}
 			out, err := cmd.CombinedOutput()
@@ -80,8 +85,11 @@ case "$url" in */SHA256SUMS) cp "$FAKE_FIXTURE/SHA256SUMS" "$dest" ;; *) cp "$FA
 				}
 				return
 			}
-			if err != nil || !strings.HasPrefix(string(args), "setup\n--no-init\n--bin-dir\n") || !strings.Contains(string(args), "--marketplace\nowner/repo\n") {
+			if err != nil || !strings.HasPrefix(string(args), "setup\n--no-init\n--bin-dir\n") {
 				t.Fatalf("setup argv %s: %v", args, err)
+			}
+			if strings.Contains(string(args), "--marketplace\nowner/repo\n") != tc.marketplace {
+				t.Fatal(string(args))
 			}
 			if strings.Contains(string(args), "--binary-only") != tc.binaryOnly {
 				t.Fatal(string(args))

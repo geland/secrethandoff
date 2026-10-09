@@ -57,6 +57,31 @@ func TestForgetWipesValue(t *testing.T) {
 	}
 }
 
+func TestRedactorCoversExactUsedValueAfterReplacementAndForget(t *testing.T) {
+	s := newStoreWith(t)
+	r := s.Redactor()
+	replacement := "another-dummy-value-12345678"
+	if err := s.Put("STRIPE_KEY", []byte(replacement), policy.Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	var used string
+	if err := s.UseWithRedactor("STRIPE_KEY", r, func(v []byte, _ policy.Policy) error {
+		used = string(v)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Forget("STRIPE_KEY")
+	if used != replacement {
+		t.Fatal("used the old value")
+	}
+	for _, value := range []string{testValue, used} {
+		if out, n := r.String(value); n == 0 || strings.Contains(out, value) {
+			t.Fatal("exact used value lost redaction")
+		}
+	}
+}
+
 func TestRedactsEveryEncoding(t *testing.T) {
 	r := newStoreWith(t).Redactor()
 	basic := base64.StdEncoding.EncodeToString([]byte("user:" + testValue))

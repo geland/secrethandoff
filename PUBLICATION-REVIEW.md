@@ -46,3 +46,23 @@ launch. Separate agent-plugin publication is also outstanding.
 
 The threat model and decision records intentionally expose security boundaries,
 residual risks, and open review gates. Hiding these is not a publication control.
+
+## Release-preparation update
+
+The next committed snapshot includes request lifecycle/cancellation fixes,
+structured command results with redaction, owner-selected Claude Code command
+approval, and binary-only website installers. ADRs 0012 and 0013 and their
+host-validation notes are included in the reviewed export. File hashes match the
+committed snapshot except for the recorded contribution-guide link adjustment.
+
+Standalone vet, full race/leak/interoperability tests, six target builds, and a
+redacted Gitleaks scan passed. Both macOS architectures were also signed and
+accepted by Apple in local candidate validation, with subsequent online
+notarization verification. This does not establish a GitHub-built release or
+clean-machine installation acceptance.
+
+The release workflow now requires signing for manual candidates as well as tags,
+uses the protected `apple-signing` environment, and explicitly checks Apple's
+accepted status. PR checks have no access to that environment. Source merging,
+a reviewed GitHub signing run, final artifact verification, and publication are
+still separate steps. No tag or release is created by this update.

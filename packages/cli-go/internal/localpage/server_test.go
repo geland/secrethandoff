@@ -257,3 +257,50 @@ func TestAgentBrowserCannotClaim(t *testing.T) {
 		t.Fatalf("own browser after the pane: %d %s", code, body)
 	}
 }
+
+func TestCancelledFillPageCannotRejectReplacement(t *testing.T) {
+	h := newHarness(t)
+	rejected := 0
+	req, err := h.s.NewFill("TOKEN", "Test", testPolicy(t), time.Minute, func([]byte) error { return nil }, func() { rejected++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := h.lastToken()
+	c := newClient()
+	h.do(c, "GET", "/api/request", token, nil, nil)
+	h.do(c, "POST", "/api/fill", token, map[string]string{"value": secretValue}, nil)
+	req.Cancel()
+	if req.State() != Rejected {
+		t.Fatal("filled page remained active after cancellation")
+	}
+	h.do(c, "POST", "/api/not-me", token, nil, nil)
+	if rejected != 0 {
+		t.Fatal("an old page invoked its name-based rejection callback")
+	}
+}
+
+func TestCancelWaitsForInFlightRejection(t *testing.T) {
+	h := newHarness(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	req, err := h.s.NewFill("TOKEN", "Test", testPolicy(t), time.Minute, func([]byte) error { return nil }, func() { close(started); <-release })
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := h.lastToken()
+	c := newClient()
+	h.do(c, "GET", "/api/request", token, nil, nil)
+	h.do(c, "POST", "/api/fill", token, map[string]string{"value": secretValue}, nil)
+	requestDone := make(chan struct{})
+	go func() { h.do(c, "POST", "/api/not-me", token, nil, nil); close(requestDone) }()
+	<-started
+	cancelled := make(chan struct{})
+	go func() { req.Cancel(); close(cancelled) }()
+	select {
+	case <-cancelled:
+		t.Error("cancellation returned before the old rejection callback finished")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(release)
+	<-requestDone
+	<-cancelled
+}

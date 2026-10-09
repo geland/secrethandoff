@@ -104,6 +104,10 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func newFixtureWith(t *testing.T, clientOpts *mcp.ClientOptions) *fixture {
+	return newFixtureClient(t, clientOpts, &mcp.Implementation{Name: "test", Version: "1"})
+}
+
+func newFixtureClient(t *testing.T, clientOpts *mcp.ClientOptions, info *mcp.Implementation) *fixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -117,7 +121,7 @@ func newFixtureWith(t *testing.T, clientOpts *mcp.ClientOptions) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, clientOpts).Connect(ctx, clientSide, nil)
+	cs, err := mcp.NewClient(info, clientOpts).Connect(ctx, clientSide, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +143,8 @@ func (f *fixture) call(name string, args map[string]any) (string, bool) {
 			b.WriteString(tc.Text)
 		}
 	}
-	f.outputs = append(f.outputs, b.String())
+	metadata, _ := json.Marshal(res.StructuredContent)
+	f.outputs = append(f.outputs, b.String()+"\n"+string(metadata))
 	return b.String(), res.IsError
 }
 
@@ -176,8 +181,11 @@ func TestHandshakeAndTools(t *testing.T) {
 	var names []string
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
+		if strings.Contains(tool.Description, serverInstructions) {
+			t.Fatalf("%s duplicates shared server instructions", tool.Name)
+		}
 	}
-	if strings.Join(names, ",") != "confirm_secret,forget_secret,http_request,list_secrets,proxy_settings,request_secret,run_with_secret" {
+	if strings.Join(names, ",") != "confirm_secret,forget_secret,http_request,list_secrets,proxy_settings,request_secret,run_with_secret,wait_for_secret" {
 		t.Fatalf("tools = %v", names)
 	}
 }
@@ -194,7 +202,7 @@ func TestAppCard(t *testing.T) {
 			linked[tool.Name] = true
 		}
 	}
-	if len(linked) != 3 || !linked["request_secret"] || !linked["run_with_secret"] || !linked["confirm_secret"] {
+	if len(linked) != 4 || !linked["request_secret"] || !linked["wait_for_secret"] || !linked["run_with_secret"] || !linked["confirm_secret"] {
 		t.Fatalf("tools linked to the card: %v", linked)
 	}
 	res, err := f.cs.ReadResource(f.ctx, &mcp.ReadResourceParams{URI: appcard.URI})

@@ -14,13 +14,11 @@ import (
 
 // Guidance layer 1 (plan section 5). Keep it to five lines or fewer and keep
 // it factual: no text that tells the agent to ignore other instructions.
-const serverInstructions = "When you need a password, API key, token, or other credential, or the user offers to paste one, call request_secret. " +
-	"Never ask the user to paste a secret in chat. " +
-	"Use a secret only by name, through http_request, or through proxy_settings or run_with_secret when a command needs it. " +
-	"Never print, echo, or write a secret to a file. " +
-	"Ask for the narrowest policy that does the task. " +
-	"After your first request_secret in a project whose AGENTS.md or CLAUDE.md has no Secrets section from Secret Handoff, " +
-	"tell the user once that `secrethandoff init` adds one, so that every agent in the project uses request_secret. Run it only if the user agrees."
+const serverInstructions = "When a task needs a credential or the user offers to paste one, call request_secret with a narrow policy; never ask for the value in chat. " +
+	"Use it by name via http_request, proxy_settings, or human-approved run_with_secret with an absolute dir; never print, log, or write it. " +
+	"For pending requests, call wait_for_secret with the name; use ready values only and confirm remote fills with the human's code. " +
+	"Follow the result's presentation; chat cards show status only. " +
+	"Offer secrethandoff init once if the project lacks its Secrets rules; run it only with the user's consent."
 
 // maxFrameBytes bounds one inbound JSON-RPC frame. Tool arguments are small.
 const maxFrameBytes = 64 * 1024

@@ -117,6 +117,12 @@ func TestLeakSuite(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	for _, mode := range []string{"browser", "claude-code"} {
+		t.Run(mode, func(t *testing.T) { runLeakSuite(t, bin, mode) })
+	}
+}
+
+func runLeakSuite(t *testing.T, bin, mode string) {
 	self, _ := os.Executable()
 	launcher := writeLauncher(t, filepath.Join(t.TempDir(), "launcher"), self)
 
@@ -126,6 +132,7 @@ func TestLeakSuite(t *testing.T) {
 		"SECRETHANDOFF_LEAK_VALUE="+leakValue,
 		"SECRETHANDOFF_WAIT_SECONDS=10",
 		"SECRETHANDOFF_LEAK_PRINTER=1",
+		"SECRETHANDOFF_COMMAND_APPROVAL="+mode,
 	)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
@@ -139,7 +146,11 @@ func TestLeakSuite(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "leak-suite", Version: "1"}, nil).Connect(ctx, transport, nil)
+	info := &mcp.Implementation{Name: "leak-suite", Version: "1"}
+	if mode == "claude-code" {
+		info = &mcp.Implementation{Name: "claude-code", Version: "2.1.284"}
+	}
+	cs, err := mcp.NewClient(info, nil).Connect(ctx, transport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +174,8 @@ func TestLeakSuite(t *testing.T) {
 	if out := call("request_secret", map[string]any{"name": "LEAK", "reason": "Leak suite", "policy": pol}); !strings.Contains(out, "LEAK is ready") {
 		t.Fatalf("request_secret: %s", out)
 	}
+	call("wait_for_secret", map[string]any{"name": "LEAK"})
+	call("wait_for_secret", map[string]any{"name": "bad name"})
 	call("list_secrets", nil)
 	// Error paths that hold the value: a failed request with the secret in
 	// the query, a header, and the body.
@@ -170,18 +183,23 @@ func TestLeakSuite(t *testing.T) {
 		"headers": map[string]string{"Authorization": "Bearer {{secret:LEAK}}"}, "body": "{{secret:LEAK}}", "timeout_seconds": 5})
 	call("http_request", map[string]any{"method": "GET", "url": "https://other.invalid/?k={{secret:LEAK}}"})
 	call("http_request", map[string]any{"method": "GET", "url": "https://leaktest.invalid/{{secret:LEAK}}"})
-	out := call("run_with_secret", map[string]any{"command": []string{self, "-test.run=^TestLeakPrinter$"}, "secrets": []string{"LEAK:LEAK_ENV"}})
+	dir, _ := os.Getwd()
+	out := call("run_with_secret", map[string]any{"dir": dir, "command": []string{self, "-test.run=^TestLeakPrinter$"}, "secrets": []string{"LEAK:LEAK_ENV"}})
 	if !strings.Contains(out, "raw [REDACTED:LEAK]") {
 		t.Fatalf("run_with_secret: %s", out)
 	}
-	call("run_with_secret", map[string]any{"command": []string{"definitely-not-a-program-xyz"}, "secrets": []string{"LEAK:LEAK_ENV"}})
+	call("run_with_secret", map[string]any{"dir": dir, "command": []string{"definitely-not-a-program-xyz"}, "secrets": []string{"LEAK:LEAK_ENV"}})
 	call("forget_secret", map[string]any{"name": "LEAK"})
+	call("wait_for_secret", map[string]any{"name": "LEAK"})
 	call("http_request", map[string]any{"method": "GET", "url": "https://leaktest.invalid/?k={{secret:LEAK}}"})
 
 	cs.Close()
 	stdin.Close()
 	cmd.Wait()
 
+	if mode == "claude-code" && !strings.Contains(rawStdout.String(), `"presentation":"client_permission"`) {
+		t.Fatal("native execution path was not exercised")
+	}
 	pageToken := regexp.MustCompile(`/r#[A-Za-z0-9_-]{43}`)
 	for label, text := range map[string]string{"tool results": strings.Join(results, "\n"), "raw stdout": rawStdout.String(), "stderr": stderr.String()} {
 		for _, form := range leakForms(leakValue) {

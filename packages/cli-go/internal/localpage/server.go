@@ -109,6 +109,21 @@ func (r *Request) State() State {
 // Done is closed when the request leaves Pending.
 func (r *Request) Done() <-chan struct{} { return r.done }
 
+// Cancel closes the fill page before its caller erases the stored value.
+// It shares the fill mutex. An old filled page also becomes Rejected, so
+// its later "This was not me" action cannot erase a replacement by name.
+func (r *Request) Cancel() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch r.state {
+	case Pending:
+		r.state = Rejected
+		close(r.done)
+	case Filled:
+		r.state = Rejected
+	}
+}
+
 // Server is the loopback page server for one MCP session.
 type Server struct {
 	ln   net.Listener
@@ -530,10 +545,12 @@ func (s *Server) handleNotMe(w http.ResponseWriter, req *http.Request) {
 	case Filled, Approved:
 		r.state = Rejected
 	}
-	r.mu.Unlock()
 	if (prev == Filled || prev == Approved) && r.onReject != nil {
+		// Keep rejection serialized with Cancel and fill. Otherwise a callback
+		// from an old page could run after a name was forgotten and reused.
 		r.onReject()
 	}
+	r.mu.Unlock()
 	writeJSON(w, map[string]State{"state": r.State()})
 }
 

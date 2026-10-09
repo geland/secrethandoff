@@ -73,7 +73,7 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
   </div>
   <h1 id="title">Secret request</h1>
   <dl id="rows"></dl>
-  <div id="status" class="status wait" role="status" aria-live="polite"><span class="mark-dot">●</span><span class="text">Waiting for you on the page in your browser.</span></div>
+  <div id="status" class="status wait" role="status" aria-live="polite"><span class="mark-dot">●</span><span class="text">Waiting for Secret Handoff.</span></div>
   <div id="pairing" class="pairing" hidden></div>
   <p class="foot">You type the secret on the Secret Handoff page in your own browser, never in this chat.</p>
 </div>
@@ -111,12 +111,46 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
   const firstSentence = (t) => { const m = /^.*?[.!?](?=\s|$)/s.exec(t.trim()); return (m ? m[0] : t.trim()).slice(0, 300); };
 
   // The same reading of the binary's result text as the Claude Code card.
-  const statusOf = (text, isError) => {
-    if (isError) return { tone: "error", text: firstSentence(text) || "The call failed." };
+  const statusOf = (text, isError, data) => {
+    const state = data && typeof data === 'object' ? data : undefined
+  if (kind === 'run_with_secret') {
+    switch (state?.status) {
+      case 'command_finished':
+        if (state.executed === true && Number.isInteger(state.exit_code)) {
+          const exit = `Exit code ${state.exit_code}.`
+          if (state.timed_out) return { tone: 'error', text: `The command timed out and was stopped. ${exit}` }
+          if (state.cancelled) return { tone: 'stop', text: `The command was cancelled and stopped. ${exit}` }
+          return { tone: state.exit_code === 0 ? 'ok' : 'error', text: `The command ran. ${exit}` }
+        }
+        break
+      case 'command_pending': return { tone: 'wait', text: 'Waiting for you to approve the command on the page in your browser.' }
+      case 'command_denied': return { tone: 'stop', text: 'You denied the command. It did not run.' }
+      case 'command_expired': return { tone: 'stop', text: 'Approval expired. The command did not run.' }
+      case 'command_cancelled': return { tone: 'stop', text: 'The call was cancelled. The command did not run.' }
+      case 'command_not_started': return { tone: 'error', text: firstSentence(typeof state.message === 'string' ? state.message : text) || 'The command could not start.' }
+    }
+  }
+    if (isError) return { tone: 'error', text: firstSentence(text || (typeof state?.message === 'string' ? state.message : '')) || 'The call failed.' };
     const pairing = (/pairing code ([0-9A-Z]{5}-[0-9A-Z]{4}-[0-9A-Z]{4})/.exec(text) || [])[1];
+  switch (state?.status) {
+    case 'ready': return { tone: 'ok', text: 'Ready. The agent uses the secret by name and never sees it.' }
+    case 'pending': return state.presentation === 'browser_page'
+      ? { tone: 'wait', text: 'Still waiting for you on the Secret Handoff page in your browser.' }
+      : state.presentation === 'client_prompt' || state.presentation === 'remote_link'
+        ? { tone: 'wait', text: 'Waiting for you on the Secret Handoff page on your other device.', code: pairing }
+        : { tone: 'wait', text: 'Waiting for Secret Handoff.' }
+    case 'confirmation_required': return { tone: 'wait', text: 'Filled. Read the confirmation code on your page to the agent.' }
+    case 'declined': return { tone: 'stop', text: 'You declined. The agent did not get a secret.' }
+    case 'cancelled': return { tone: 'stop', text: 'Cancelled. Any value was discarded.' }
+    case 'expired': return { tone: 'stop', text: 'The request expired.' }
+    case 'forgotten': return { tone: 'stop', text: 'The secret was forgotten. Any open request was cancelled.' }
+    case 'missing': return { tone: 'stop', text: 'No request or secret exists with this name.' }
+    case 'error': return { tone: 'error', text: firstSentence(text) || 'The call failed.' }
+  }
     if (/ is ready\./.test(text)) return { tone: "ok", text: "Ready. The agent uses the secret by name and never sees it." };
     if (/confirmation code/.test(text)) return { tone: "wait", text: "Filled. Read the confirmation code on your page to the agent." };
     if (/has no browser/.test(text) || /agent client is showing a page/.test(text)) return { tone: "wait", text: "Open the link on your phone or another computer. Continue only if it shows this pairing code.", code: pairing, remote: true };
+    if (/^Waiting for the user.*other device/.test(text)) return { tone: "wait", text: "Still waiting for you on the Secret Handoff page on your other device." };
     if (/^Waiting for the user to approve/.test(text)) return { tone: "wait", text: "Waiting for you to approve the command on the page in your browser." };
     if (/^Waiting for the user/.test(text)) return { tone: "wait", text: "Still waiting for you on the page in your browser." };
     if (/declined|did not approve/.test(text)) return { tone: "stop", text: kind === "run_with_secret" ? "You denied the command. It did not run." : "You declined. The agent did not get a secret." };
@@ -163,17 +197,22 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
       $("title").textContent = "Command with secrets";
       row("Command", list(args.command).join(" "), "mono");
       row("Secrets", list(args.secrets).join(", "), "mono");
-      setStatus({ tone: "wait", text: "Waiting for you to approve the command on the page in your browser." });
+      row("Folder", typeof args.dir === "string" ? args.dir : "", "mono");
+      setStatus({ tone: "wait", text: "Waiting for your command approval." });
     } else if ("code" in args) {
       kind = "confirm_secret";
       $("title").textContent = "Confirm " + (typeof args.name === "string" ? args.name : "");
       setStatus({ tone: "wait", text: "Checking the confirmation code." });
+    } else if (!("reason" in args) && !("policy" in args)) {
+      kind = "wait_for_secret";
+      $("title").textContent = "Wait for " + (typeof args.name === "string" ? args.name : "");
+      setStatus({ tone: "wait", text: "Waiting for Secret Handoff." });
     } else {
       kind = "request_secret";
       $("title").textContent = typeof args.name === "string" && args.name ? args.name : "Secret request";
       row("Reason", typeof args.reason === "string" && args.reason ? "“" + args.reason + "”" : "(no reason given)", "reason");
       row("Can go to", policyLine(args.policy));
-      setStatus({ tone: "wait", text: "Waiting for you on the page in your browser." });
+      setStatus({ tone: "wait", text: "Waiting for Secret Handoff." });
     }
   };
 
@@ -201,7 +240,7 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
     }
     switch (msg.method) {
       case "ui/notifications/tool-input": showInput((msg.params || {}).arguments); break;
-      case "ui/notifications/tool-result": { const r = msg.params || {}; setStatus(statusOf(resultText(r), r.isError === true)); break; }
+      case "ui/notifications/tool-result": { const r = msg.params || {}; setStatus(statusOf(resultText(r), r.isError === true, r.structuredContent)); break; }
       case "ui/notifications/tool-cancelled": setStatus({ tone: "stop", text: "Cancelled." }); break;
       case "ui/notifications/host-context-changed": applyTheme(msg.params); break;
       case "ui/resource-teardown": if (msg.id !== undefined) send({ id: msg.id, result: {} }); break;
