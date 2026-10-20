@@ -35,9 +35,10 @@
     <section id="fill" class="card" hidden>
       <p class="label">Reason <span class="hint">written by the AI agent, not by Secret Handoff</span></p>
       <blockquote id="reason"></blockquote>
-      <p class="label">Where the secret can go</p>
+      <p id="policy-label" class="label">Where the secret can go</p>
       <p id="policy" class="policy"></p>
       <p id="wildcard" class="warn" hidden>This policy uses a wildcard host. Any one subdomain of that host can receive the secret.</p>
+      <div id="single-fields">
       <label for="value" class="label">Secret</label>
       <input id="value" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">
       <textarea id="value-multi" rows="6" autocomplete="off" spellcheck="false" hidden></textarea>
@@ -45,11 +46,13 @@
         <label class="check"><input id="multi" type="checkbox"> The secret has several lines (shown as you type)</label>
         <button id="reveal" type="button" class="link">Show</button>
       </div>
+      </div>
+      <div id="group-fields" hidden></div>
       <div class="actions">
         <button id="submit" type="button" class="primary">Give secret to agent <span aria-hidden="true">→</span></button>
         <button id="decline" type="button" class="secondary">Decline</button>
       </div>
-      <p class="note">The secret stays on this computer. The agent gets only its name and can use it only as the policy above allows.</p>
+      <p class="note" id="fill-note">The secret stays on this computer. The agent gets only its name and can use it only as the policy above allows.</p>
       <div id="phone" hidden>
         <button id="phone-start" type="button" class="link">Fill on my phone instead</button>
         <div id="phone-panel" hidden>

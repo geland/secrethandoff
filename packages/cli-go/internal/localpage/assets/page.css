@@ -105,3 +105,6 @@ footer .mono { font-size: inherit; }
   h1 { font-size: 30px; }
   .actions button { width: 100%; }
 }
+
+.group-field + .group-field { margin-top: 24px; }
+.group-field .label { overflow-wrap: anywhere; }

@@ -1,6 +1,7 @@
 # ADR 0013: Owner-selected host command approval
 
 - Status: Accepted for opt-in implementation; native prompt verified in owner test
+- Partially superseded for Codex command authorization by [ADR 0014](0014-codex-owner-policy-approval.md)
 - Date: 2026-10-09
 - Extends ADR 0009 for command approval only
 

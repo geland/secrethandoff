@@ -32,3 +32,12 @@ Not tested: Cursor and Gemini CLI (not installed), the Claude Code sandbox setti
 ## Side finding
 
 The test machine's `~/.codex/config.toml` has `network_access = true` at the top level. Codex ignored it: the sandbox blocked network access until `sandbox_workspace_write.network_access` was set.
+
+### Codex command approval opt-in (2026-10-09)
+
+Browser approval remains the default. Stable Codex 0.155.1 in the 0.155 series
+and the exact desktop build `0.162.0-alpha.17.2` (ADR 0015) can use
+owner-selected native MCP approval, including automatic policy decisions, with
+`SECRETHANDOFF_COMMAND_APPROVAL=codex`. See [ADR 0014](../adr/0014-codex-owner-policy-approval.md)
+and [the Codex check](codex-command-approval-check.md). This supersedes the
+fresh-human-click exclusion for that opt-in only. Secret entry stays in the browser.

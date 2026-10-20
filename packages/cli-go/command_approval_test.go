@@ -18,6 +18,28 @@ func TestClientCommandApproval(t *testing.T) {
 		native                           bool
 	}{
 		{"opted-in Claude", "claude-code", "claude-code", "2.1.284", "absolute", true},
+		{"opted-in Codex", "codex", "codex-mcp-client", "0.155.1", "absolute", true},
+		{"opted-in Codex desktop", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "absolute", true},
+		{"desktop browser default", "", "codex-mcp-client", "0.162.0-alpha.17.2", "absolute", false},
+		{"desktop explicit browser", "browser", "codex-mcp-client", "0.162.0-alpha.17.2", "absolute", false},
+		{"desktop wrong mode", "claude-code", "codex-mcp-client", "0.162.0-alpha.17.2", "absolute", false},
+		{"desktop wrong client", "codex", "other-client", "0.162.0-alpha.17.2", "absolute", false},
+		{"desktop implicit dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "", false},
+		{"desktop relative dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", ".", false},
+		{"desktop unclean dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "/tmp/../tmp", false},
+		{"desktop previous build", "codex", "codex-mcp-client", "0.162.0-alpha.17.1", "absolute", false},
+		{"desktop next build", "codex", "codex-mcp-client", "0.162.0-alpha.17.3", "absolute", false},
+		{"desktop stable unverified", "codex", "codex-mcp-client", "0.162.0", "absolute", false},
+		{"desktop version extra suffix", "codex", "codex-mcp-client", "0.162.0-alpha.17.2+extra", "absolute", false},
+		{"Codex browser default", "", "codex-mcp-client", "0.155.1", "absolute", false},
+		{"Codex wrong client", "codex", "claude-code", "0.155.1", "absolute", false},
+		{"Claude wrong client", "claude-code", "codex-mcp-client", "0.155.1", "absolute", false},
+		{"Codex old version", "codex", "codex-mcp-client", "0.155.0", "absolute", false},
+		{"Codex future minor", "codex", "codex-mcp-client", "0.156.1", "absolute", false},
+		{"Codex prerelease", "codex", "codex-mcp-client", "0.155.1-preview", "absolute", false},
+		{"Codex implicit dir", "codex", "codex-mcp-client", "0.155.1", "", false},
+		{"Codex relative dir", "codex", "codex-mcp-client", "0.155.1", ".", false},
+		{"Codex unclean dir", "codex", "codex-mcp-client", "0.155.1", "/tmp/../tmp", false},
 		{"browser default", "", "claude-code", "2.1.284", "absolute", false},
 		{"invalid mode", "auto", "claude-code", "2.1.284", "absolute", false},
 		{"unknown host", "claude-code", "test", "2.1.284", "absolute", false},
@@ -51,7 +73,11 @@ func TestClientCommandApproval(t *testing.T) {
 				if !strings.Contains(out, "exit code: 3") || opened != 0 {
 					t.Fatalf("native result %q, opened %d pages", out, opened)
 				}
-				if !strings.Contains(f.outputs[len(f.outputs)-1], `"presentation":"client_permission"`) {
+				surface, approval := "client_permission", "approved"
+				if tc.mode == "codex" {
+					surface, approval = "client_policy", "host_policy"
+				}
+				if !strings.Contains(f.outputs[len(f.outputs)-1], `"presentation":"`+surface+`"`) || !strings.Contains(f.outputs[len(f.outputs)-1], `"approval":"`+approval+`"`) {
 					t.Fatal("native result did not report its approval surface")
 				}
 			} else if !strings.Contains(out, "did not approve") || opened != 1 {
@@ -126,4 +152,21 @@ func TestAgentCannotSupplyCommandApproval(t *testing.T) {
 		t.Fatalf("agent approval accepted: %s", out)
 	}
 	f.assertNoLeak()
+}
+
+func TestCodexCommandMetadataDoesNotClaimMandatoryInteraction(t *testing.T) {
+	t.Setenv("SECRETHANDOFF_COMMAND_APPROVAL", "codex")
+	f := newFixture(t)
+	list, err := f.cs.ListTools(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range list.Tools {
+		if tool.Meta["anthropic/requiresUserInteraction"] != nil {
+			t.Fatal("Codex claims a mandatory human gate")
+		}
+		if tool.Name == "run_with_secret" && (tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || tool.Annotations.OpenWorldHint == nil || !*tool.Annotations.OpenWorldHint) {
+			t.Fatal("command risk annotations missing")
+		}
+	}
 }

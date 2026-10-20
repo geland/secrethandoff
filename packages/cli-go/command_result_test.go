@@ -64,14 +64,28 @@ func (f *fixture) commandCall(args map[string]any, status string, isError bool) 
 }
 
 func TestCommandResultsAreCompleteWithoutText(t *testing.T) {
-	for _, surface := range []string{"browser_page", "client_permission"} {
+	for _, client := range []string{"browser_page", "client_permission", "client_policy", "codex_desktop"} {
+		surface := client
+		if client == "codex_desktop" {
+			surface = "client_policy"
+		}
 		for _, mode := range []string{"success", "nonzero", "timeout", "truncated", "missing_program"} {
-			t.Run(surface+"/"+mode, func(t *testing.T) {
+			t.Run(client+"/"+mode, func(t *testing.T) {
 				t.Setenv("SECRETHANDOFF_COMMAND_APPROVAL", "")
 				if surface == "client_permission" {
 					t.Setenv("SECRETHANDOFF_COMMAND_APPROVAL", "claude-code")
 				}
-				f := newFixtureClient(t, nil, &mcp.Implementation{Name: "claude-code", Version: "2.1.284"})
+				info := &mcp.Implementation{Name: "claude-code", Version: "2.1.284"}
+				approval := "approved"
+				if surface == "client_policy" {
+					t.Setenv("SECRETHANDOFF_COMMAND_APPROVAL", "codex")
+					info = &mcp.Implementation{Name: "codex-mcp-client", Version: "0.155.1"}
+					if client == "codex_desktop" {
+						info.Version = "0.162.0-alpha.17.2"
+					}
+					approval = "host_policy"
+				}
+				f := newFixtureClient(t, nil, info)
 				f.fillSecret("TOKEN")
 				f.h.set("approve", "")
 				t.Setenv("SECRETHANDOFF_RESULT_HELPER", mode)
@@ -88,7 +102,7 @@ func TestCommandResultsAreCompleteWithoutText(t *testing.T) {
 				}
 				args := map[string]any{"command": command, "secrets": []string{"TOKEN:MY_TOKEN"}, "dir": dir, "timeout_seconds": timeout}
 				data := f.commandCall(args, status, wantError)
-				if data["approval"] != "approved" || data["presentation"] != surface {
+				if data["approval"] != approval || data["presentation"] != surface {
 					t.Fatalf("approval metadata: %v", data)
 				}
 				if mode == "missing_program" {

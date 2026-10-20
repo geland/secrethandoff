@@ -10,8 +10,8 @@ issues before coordination with the maintainer.
 
 ## Supported versions
 
-There is no approved public binary release yet. This repository is published for
-source inspection. Reports against the default branch are welcome; no response
+Public signed releases are available. Report issues against the latest release
+or the default branch. Reports against the default branch are welcome; no response
 SLA or security certification is promised. Do not rely on a source publication
 or a passing CI check as a completed independent review.
 

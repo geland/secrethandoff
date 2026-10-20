@@ -117,12 +117,16 @@ func TestLeakSuite(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	for _, mode := range []string{"browser", "claude-code"} {
+	for _, mode := range []string{"browser", "claude-code", "codex", "codex-desktop"} {
 		t.Run(mode, func(t *testing.T) { runLeakSuite(t, bin, mode) })
 	}
 }
 
 func runLeakSuite(t *testing.T, bin, mode string) {
+	approvalMode := mode
+	if mode == "codex-desktop" {
+		approvalMode = "codex"
+	}
 	self, _ := os.Executable()
 	launcher := writeLauncher(t, filepath.Join(t.TempDir(), "launcher"), self)
 
@@ -132,7 +136,7 @@ func runLeakSuite(t *testing.T, bin, mode string) {
 		"SECRETHANDOFF_LEAK_VALUE="+leakValue,
 		"SECRETHANDOFF_WAIT_SECONDS=10",
 		"SECRETHANDOFF_LEAK_PRINTER=1",
-		"SECRETHANDOFF_COMMAND_APPROVAL="+mode,
+		"SECRETHANDOFF_COMMAND_APPROVAL="+approvalMode,
 	)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
@@ -149,6 +153,12 @@ func runLeakSuite(t *testing.T, bin, mode string) {
 	info := &mcp.Implementation{Name: "leak-suite", Version: "1"}
 	if mode == "claude-code" {
 		info = &mcp.Implementation{Name: "claude-code", Version: "2.1.284"}
+	}
+	if mode == "codex" {
+		info = &mcp.Implementation{Name: "codex-mcp-client", Version: "0.155.1"}
+	}
+	if mode == "codex-desktop" {
+		info = &mcp.Implementation{Name: "codex-mcp-client", Version: "0.162.0-alpha.17.2"}
 	}
 	cs, err := mcp.NewClient(info, nil).Connect(ctx, transport, nil)
 	if err != nil {
@@ -199,6 +209,9 @@ func runLeakSuite(t *testing.T, bin, mode string) {
 
 	if mode == "claude-code" && !strings.Contains(rawStdout.String(), `"presentation":"client_permission"`) {
 		t.Fatal("native execution path was not exercised")
+	}
+	if approvalMode == "codex" && (!strings.Contains(rawStdout.String(), `"presentation":"client_policy"`) || !strings.Contains(rawStdout.String(), `"approval":"host_policy"`)) {
+		t.Fatal("Codex execution path was not exercised")
 	}
 	pageToken := regexp.MustCompile(`/r#[A-Za-z0-9_-]{43}`)
 	for label, text := range map[string]string{"tool results": strings.Join(results, "\n"), "raw stdout": rawStdout.String(), "stderr": stderr.String()} {

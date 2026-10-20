@@ -51,7 +51,7 @@ func addRunTool(server *mcp.Server, s *session) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_with_secret",
 		Meta: meta,
-		Description: "Run one command with secrets in its environment after human approval, in the browser or an owner-enabled Claude Code permission prompt. " +
+		Description: "Run one command with secrets in its environment after browser approval or owner-enabled host authorization (Claude Code permission prompt or Codex approval policy). " +
 			"Use it only when a program must read a secret from its environment; prefer http_request. " +
 			"Pass an explicit absolute dir for client approval. A command that holds a secret can send it anywhere; its network policy is not enforced. " +
 			"Returns the exit code and the output with every secret value removed. Calling again with the same arguments rejoins an open approval.",
@@ -87,7 +87,11 @@ func (s *session) runWithSecret(ctx context.Context, call *mcp.CallToolRequest, 
 	if s.clientCommandApproval(call, in.Dir) {
 		// The trusted host gates this tools/call itself. There is deliberately
 		// no approve tool, Boolean argument, form response, or remembered grant.
-		return s.execute(ctx, in.Command, dir, bindings, timeout, "client_permission"), nil, nil
+		presentation := "client_permission"
+		if s.commandApproval == "codex" {
+			presentation = "client_policy"
+		}
+		return s.execute(ctx, in.Command, dir, bindings, timeout, presentation), nil, nil
 	}
 
 	key := approvalKey(in.Command, dir, in.Secrets, timeout)
@@ -183,28 +187,38 @@ func approvalKey(command []string, dir string, secretList []string, timeout time
 	return hex.EncodeToString(sum[:])
 }
 
-// clientCommandApproval trusts the owner's chosen interactive Claude Code
-// host, not a generic elicitation capability or a client-provided approval bit.
-// 2.1.284 is the oldest targeted build; live host acceptance is required before
-// opting in. SDK/custom permission hosts must keep browser mode: their
-// canUseTool callback can approve without a human.
+// clientCommandApproval trusts the owner's selected host boundary. ClientInfo
+// is self-reported, not proof of a human click. Codex follows owner policy,
+// including automatic review and hooks; Claude retains mandatory interaction.
+// Unknown hosts/versions and implicit or noncanonical folders use the browser.
 func (s *session) clientCommandApproval(call *mcp.CallToolRequest, dir string) bool {
-	if s.commandApproval != "claude-code" || call == nil || call.Session == nil || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+	if call == nil || call.Session == nil || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return false
 	}
 	p := call.Session.InitializeParams()
-	if p == nil || p.ClientInfo == nil || p.ClientInfo.Name != "claude-code" {
+	if p == nil || p.ClientInfo == nil {
 		return false
+	}
+	// This exact desktop build is separately validated. Do not admit an entire
+	// prerelease series or infer compatibility from a newer version number.
+	if s.commandApproval == "codex" && p.ClientInfo.Name == "codex-mcp-client" && p.ClientInfo.Version == "0.162.0-alpha.17.2" {
+		return true
 	}
 	var major, minor, patch int
 	if _, err := fmt.Sscanf(p.ClientInfo.Version, "%d.%d.%d", &major, &minor, &patch); err != nil {
 		return false
 	}
-	// Do not infer support across minor/major releases or from pre-release labels.
 	if p.ClientInfo.Version != fmt.Sprintf("%d.%d.%d", major, minor, patch) {
 		return false
 	}
-	return major == 2 && minor == 1 && patch >= 284
+	switch s.commandApproval {
+	case "claude-code":
+		return p.ClientInfo.Name == "claude-code" && major == 2 && minor == 1 && patch >= 284
+	case "codex":
+		return p.ClientInfo.Name == "codex-mcp-client" && major == 0 && minor == 155 && patch >= 1
+	default:
+		return false
+	}
 }
 
 func (s *session) commandNotRun(status, approval, message string) *mcp.CallToolResult {
@@ -241,6 +255,9 @@ func (s *session) execute(ctx context.Context, command []string, dir string, bin
 	finish := func(result *mcp.CallToolResult, data map[string]any) *mcp.CallToolResult {
 		data["presentation"] = presentation
 		data["approval"] = "approved"
+		if presentation == "client_policy" {
+			data["approval"] = "host_policy"
+		}
 		// Hosts may show just structuredContent. It must carry the complete
 		// outcome, redacted for both the values used and those currently held.
 		structured(result, data, redactor)

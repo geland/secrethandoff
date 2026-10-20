@@ -22,6 +22,8 @@
   window.addEventListener("hashchange", () => location.reload());
   let current = null;
   let timer = null;
+  let groupSignature = "";
+  let groupFields = [];
 
   const call = async (path, body) => {
     const res = await fetch(path, {
@@ -47,6 +49,65 @@
     expired: ["Expired", "This request expired. Ask the agent to try again if you still need it."],
   };
 
+  const renderFields = (fields) => {
+    const signature = JSON.stringify(fields);
+    $("single-fields").hidden = fields.length > 0;
+    $("group-fields").hidden = fields.length === 0;
+    if (signature === groupSignature) return;
+    groupSignature = signature;
+    groupFields = [];
+    $("group-fields").replaceChildren();
+    fields.forEach((field, index) => {
+      const section = document.createElement("div");
+      section.className = "group-field";
+      const label = document.createElement("label");
+      label.className = "label";
+      label.htmlFor = "field-" + index;
+      label.textContent = field.label || field.name;
+      const name = document.createElement("span");
+      name.className = "hint";
+      name.textContent = field.name;
+      name.hidden = field.label === field.name;
+      label.append(name);
+      const input = document.createElement("input");
+      input.id = label.htmlFor;
+      input.type = "password";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.autocapitalize = "off";
+      const textarea = document.createElement("textarea");
+      textarea.id = "field-multi-" + index;
+      textarea.rows = 3;
+      textarea.autocomplete = "off";
+      textarea.spellcheck = false;
+      textarea.hidden = true;
+      textarea.setAttribute("aria-label", (field.label || field.name) + " (multiple lines)");
+      const row = document.createElement("div");
+      row.className = "row";
+      const multiLabel = document.createElement("label");
+      multiLabel.className = "check";
+      const multi = document.createElement("input");
+      multi.type = "checkbox";
+      multiLabel.append(multi, document.createTextNode(" Multiple lines (shown as you type)"));
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "link";
+      reveal.textContent = "Show";
+      reveal.setAttribute("aria-label", "Show " + (field.label || field.name));
+      reveal.addEventListener("click", () => { input.type = input.type === "password" ? "text" : "password"; reveal.textContent = input.type === "password" ? "Show" : "Hide"; reveal.setAttribute("aria-label", reveal.textContent + " " + (field.label || field.name)); });
+      multi.addEventListener("change", () => { input.hidden = multi.checked; textarea.hidden = !multi.checked; reveal.hidden = multi.checked; });
+      row.append(multiLabel, reveal);
+      section.append(label, input, textarea, row);
+      $("group-fields").append(section);
+      groupFields.push({ name: field.name, input, textarea, multi });
+    });
+  };
+  const clearValues = () => {
+    $("value").value = "";
+    $("value-multi").value = "";
+    groupFields.forEach(f => { f.input.value = ""; f.textarea.value = ""; });
+  };
+
   const render = (v) => {
     current = v;
     const pending = v.state === "pending";
@@ -59,8 +120,13 @@
     $("fill").hidden = !(pending && v.kind === "fill" && v.claimed_here);
     $("approve").hidden = !(pending && v.kind === "approve" && v.claimed_here);
     if (v.kind === "fill") {
-      $("title").textContent = "Your agent asks for " + v.name;
+      const fields = v.fields || [];
+      renderFields(fields);
+      $("title").textContent = fields.length ? "Give " + fields.length + " secrets together" : "Your agent asks for " + v.name;
+      $("submit").textContent = fields.length ? "Give all secrets to agent →" : "Give secret to agent →";
+      $("fill-note").textContent = fields.length ? "All fields are required and submitted together. Combined limit: 32 KiB. Values stay on this computer; the agent receives only their names. Forgetting any member erases the whole group." : "The secret stays on this computer. The agent gets only its name and can use it only as the policy above allows.";
       $("reason").textContent = v.reason || "(no reason given)";
+      $("policy-label").textContent = fields.length ? "Where these secrets can go" : "Where the secret can go";
       $("policy").textContent = v.policy;
       $("wildcard").hidden = !v.wildcard;
       $("phone").hidden = !v.phone_fill_available;
@@ -78,7 +144,8 @@
       $("notme").hidden = false;
       setStatus("");
     } else if (!pending) {
-      const [title, text] = finalText[v.state === "filled" && v.via_phone ? "filled_phone" : v.state] || ["Done", ""];
+      clearValues();
+      const [title, text] = v.state === "filled" && (v.fields || []).length ? ["Secrets given", "All fields were submitted together. The agent can use each secret by its name. You can close this tab."] : finalText[v.state === "filled" && v.via_phone ? "filled_phone" : v.state] || ["Done", ""];
       $("title").textContent = title;
       $("origin").hidden = true;
       after.hidden = false;
@@ -119,12 +186,18 @@
       setStatus(e.message);
     } finally {
       for (const b of document.querySelectorAll("button")) b.disabled = false;
-      $("value").value = "";
-      $("value-multi").value = "";
+      clearValues();
       refresh();
     }
   };
   $("submit").addEventListener("click", () => {
+    if (groupFields.length) {
+      const values = Object.fromEntries(groupFields.map(f => [f.name, (f.multi.checked ? f.textarea : f.input).value]));
+      if (Object.values(values).some(v => !v)) { setStatus("Fill every field first."); return; }
+      if (Object.values(values).reduce((n, v) => n + new TextEncoder().encode(v).length, 0) > 32768 || new TextEncoder().encode(JSON.stringify({values})).length > 65536) { setStatus("The group is too large. Use at most 32 KiB combined, within a 64 KiB encoded submission."); return; }
+      act("/api/fill", () => ({ values }))();
+      return;
+    }
     if (!valueField().value) { setStatus("Enter the secret first."); return; }
     act("/api/fill", () => ({ value: valueField().value }))();
   });

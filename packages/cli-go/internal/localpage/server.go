@@ -72,22 +72,33 @@ type RelayStarter func() (RelayInfo, error)
 // returns, so the handler must copy what it keeps.
 type FillHandler func(value []byte) error
 
+// Field contains display metadata only, never a value.
+type Field struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+}
+
+const MaxGroupFields = 8
+
 // Request is one fill or approval page.
 type Request struct {
-	Kind    Kind
-	Name    string
-	Reason  string
-	Policy  policy.Policy
-	Command []string
-	Dir     string
-	Secrets []string
-	Expires time.Time
+	Kind     Kind
+	Fields   []Field
+	GroupTTL time.Duration
+	Name     string
+	Reason   string
+	Policy   policy.Policy
+	Command  []string
+	Dir      string
+	Secrets  []string
+	Expires  time.Time
 
-	onFill   FillHandler
-	onReject func()
-	onRelay  RelayStarter
-	relay    *RelayInfo
-	viaPhone bool
+	onFill      FillHandler
+	onFillGroup func(map[string][]byte) error
+	onReject    func()
+	onRelay     RelayStarter
+	relay       *RelayInfo
+	viaPhone    bool
 
 	mu        sync.Mutex
 	state     State
@@ -185,6 +196,15 @@ func (s *Server) NewFill(name, reason string, p policy.Policy, ttl time.Duration
 	return r, s.add(r, ttl)
 }
 
+// NewGroup creates one local-only form. Field metadata is immutable after open.
+func (s *Server) NewGroup(name, reason string, fields []Field, p policy.Policy, ttl time.Duration, fill func(map[string][]byte) error, reject func()) (*Request, error) {
+	if len(fields) < 2 || len(fields) > MaxGroupFields {
+		return nil, errors.New("a group needs 2 to 8 fields")
+	}
+	r := &Request{Kind: KindFill, Name: name, Reason: reason, Fields: append([]Field(nil), fields...), GroupTTL: ttl, Policy: p, onFillGroup: fill, onReject: reject}
+	return r, s.add(r, ttl)
+}
+
 // SetRelayStarter enables "Fill on my phone instead" for a fill request.
 func (r *Request) SetRelayStarter(start RelayStarter) {
 	r.mu.Lock()
@@ -207,6 +227,9 @@ func (r *Request) FillExternal(value []byte) error {
 	defer r.mu.Unlock()
 	if r.state != Pending {
 		return fmt.Errorf("this request is already %s", r.state)
+	}
+	if r.onFill == nil {
+		return errors.New("this request requires all group fields together")
 	}
 	if err := r.onFill(value); err != nil {
 		return err
@@ -364,6 +387,7 @@ type view struct {
 	Kind        Kind      `json:"kind"`
 	State       State     `json:"state"`
 	Name        string    `json:"name,omitempty"`
+	Fields      []Field   `json:"fields,omitempty"`
 	Reason      string    `json:"reason,omitempty"`
 	Policy      string    `json:"policy,omitempty"`
 	Wildcard    bool      `json:"wildcard,omitempty"`
@@ -400,7 +424,7 @@ func (s *Server) handleGet(w http.ResponseWriter, req *http.Request) {
 			http.SetCookie(w, &http.Cookie{Name: r.cookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		}
 	}
-	v := view{Kind: r.Kind, State: r.state, Name: r.Name, Reason: r.Reason, Command: r.Command, Dir: r.Dir, Secrets: r.Secrets, Expires: r.Expires, ClaimedHere: here, ClaimedElse: r.claimed && !here, PhoneFill: r.onRelay != nil, ViaPhone: r.viaPhone, PhoneError: r.relayErr, About: about}
+	v := view{Kind: r.Kind, State: r.state, Name: r.Name, Fields: r.Fields, Reason: r.Reason, Command: r.Command, Dir: r.Dir, Secrets: r.Secrets, Expires: r.Expires, ClaimedHere: here, ClaimedElse: r.claimed && !here, PhoneFill: r.onRelay != nil, ViaPhone: r.viaPhone, PhoneError: r.relayErr, About: about}
 	r.mu.Unlock()
 	if r.Kind == KindFill {
 		v.Policy, v.Wildcard = r.Policy.Describe(), r.Policy.HasWildcard()
@@ -458,6 +482,9 @@ func (r *Request) transition(st State) error {
 }
 
 func (r *Request) fill(body io.Reader) error {
+	if len(r.Fields) != 0 {
+		return r.fillGroup(body)
+	}
 	var in struct {
 		Value string `json:"value"`
 	}
@@ -477,6 +504,54 @@ func (r *Request) fill(body io.Reader) error {
 	}
 	if err := r.onFill(value); err != nil {
 		return err
+	}
+	r.state = Filled
+	close(r.done)
+	return nil
+}
+
+func (r *Request) fillGroup(body io.Reader) error {
+	var in struct {
+		Values map[string]string `json:"values"`
+	}
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&in); err != nil {
+		return errors.New("invalid group submission; keep the encoded form under 64 KiB")
+	}
+	defer func() {
+		for name := range in.Values {
+			delete(in.Values, name)
+		}
+	}()
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("invalid group submission")
+	}
+	if len(in.Values) != len(r.Fields) {
+		return errors.New("fill every requested field, with no additional fields")
+	}
+	values := make(map[string][]byte, len(r.Fields))
+	defer func() {
+		for _, value := range values {
+			wipe(value)
+		}
+	}()
+	total := 0
+	for _, field := range r.Fields {
+		value := []byte(in.Values[field.Name])
+		values[field.Name] = value
+		total += len(value)
+		if len(value) == 0 || total > maxValueLen {
+			return errors.New("all fields are required; combined values must be at most 32 KiB")
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state != Pending {
+		return errors.New("this request is no longer pending")
+	}
+	if err := r.onFillGroup(values); err != nil {
+		return errors.New("could not store the secret group")
 	}
 	r.state = Filled
 	close(r.done)
