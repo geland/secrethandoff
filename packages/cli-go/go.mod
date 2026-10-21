@@ -4,7 +4,10 @@ go 1.27.0
 
 toolchain go1.27.1
 
-require github.com/modelcontextprotocol/go-sdk v1.8.0
+require (
+	github.com/coder/websocket v1.8.14
+	github.com/modelcontextprotocol/go-sdk v1.8.0
+)
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect

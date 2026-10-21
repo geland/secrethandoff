@@ -221,6 +221,35 @@
   });
 
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) { setStatus("This page link is not valid."); return; }
+
+  // Keep this page's browser lifetime alive independently of request polling.
+  // The token goes in a handshake header, never a URL; no values travel here.
+  let presenceSocket = null;
+  let presenceRetry = null;
+  let leaving = false;
+  const connectPresence = () => {
+    if (leaving || presenceSocket) return;
+    try {
+      const socket = new WebSocket("ws://" + location.host + "/api/presence", ["secrethandoff.presence", "sh-token." + token]);
+      presenceSocket = socket;
+      socket.onclose = () => {
+        if (presenceSocket !== socket) return;
+        presenceSocket = null;
+        if (!leaving) presenceRetry = setTimeout(connectPresence, 1000);
+      };
+    } catch { if (!leaving) presenceRetry = setTimeout(connectPresence, 1000); }
+  };
+  window.addEventListener("pagehide", () => {
+    leaving = true;
+    clearTimeout(presenceRetry);
+    const socket = presenceSocket;
+    presenceSocket = null;
+    if (socket) socket.close();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) { leaving = false; connectPresence(); }
+  });
+  connectPresence();
   refresh();
   timer = setInterval(refresh, 2000);
 })();
