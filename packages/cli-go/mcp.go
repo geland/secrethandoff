@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -70,5 +72,11 @@ func runMCP() error {
 	hardening.Apply()
 	s := newSession()
 	defer s.close()
-	return newMCPServer(s).Run(context.Background(), &mcp.IOTransport{Reader: os.Stdin, Writer: os.Stdout, MaxLineLength: maxFrameBytes})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := newMCPServer(s).Run(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: os.Stdout, MaxLineLength: maxFrameBytes})
+	if ctx.Err() != nil {
+		return nil // owner/client shutdown still runs the deferred cleanup
+	}
+	return err
 }

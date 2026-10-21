@@ -105,7 +105,7 @@ Lifecycle tools preserve human-readable text and return value-free MCP `structur
 | Variable | Effect |
 |---|---|
 | `SECRETHANDOFF_COMMAND_APPROVAL` | Default or `browser`: approve commands on the local page. `claude-code`: opt into Claude Code's mandatory per-call permission prompt, for the supported interactive host described below. `codex`: opt into Codex approval settings, including automatic review and hooks. Unknown values keep browser approval. |
-| `SECRETHANDOFF_ISOLATED_BROWSER` | `0` opens fill pages in the default browser instead of the isolated window. The isolated window is a separate Chrome, Edge, Brave, or Chromium window with a temporary profile and no extensions, so AI browser extensions cannot read the page. |
+| `SECRETHANDOFF_ISOLATED_BROWSER` | `0` opens fill pages in the default browser instead of the isolated window. By default each agent session uses a separate Chrome, Edge, Brave, or Chromium temporary profile, with incognito tabs, no extensions, and password saving disabled. Requests reuse that window. After the last Secret Handoff tab closes, its browser and profile are removed after a 30-second grace period. Session shutdown closes it immediately. |
 | `SECRETHANDOFF_NO_BROWSER` | Act as if no browser is available. `request_secret` uses remote mode. |
 | `SECRETHANDOFF_BROWSER` | One program to open fill pages, run with the URL as its only argument. |
 | `SECRETHANDOFF_RELAY_URL` | Relay service URL. Default: `https://secrethandoff.com`. Use a local `wrangler dev` URL for tests. |

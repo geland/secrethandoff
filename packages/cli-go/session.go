@@ -77,6 +77,7 @@ func (s *session) pageServer() (*localpage.Server, error) {
 		}
 		s.pages, s.pagesErr = localpage.Start(s.open)
 		if s.pagesErr == nil {
+			s.pages.SetPagePresence(browser.PageConnected)
 			s.agentMu.Lock()
 			isolated, _ := browser.Describe()
 			s.pages.SetAbout(localpage.About{Client: s.agent, Version: version, Isolated: isolated})

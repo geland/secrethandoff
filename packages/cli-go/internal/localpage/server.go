@@ -3,6 +3,7 @@
 package localpage
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"secrethandoff.com/cli/internal/loopback"
 	"secrethandoff.com/cli/internal/policy"
@@ -141,10 +144,21 @@ type Server struct {
 	srv  *http.Server
 	host string
 	open func(url string) error
+	ctx  context.Context
+	stop context.CancelFunc
 
-	mu    sync.Mutex
-	reqs  map[[32]byte]*Request
-	about About
+	mu            sync.Mutex
+	reqs          map[[32]byte]*Request
+	about         About
+	pageConnected func() func()
+}
+
+// SetPagePresence attaches browser lifetime tracking. It must be set before
+// opening any page. Only authenticated local pages can hold this connection.
+func (s *Server) SetPagePresence(connected func() func()) {
+	s.mu.Lock()
+	s.pageConnected = connected
+	s.mu.Unlock()
 }
 
 // About tells the human which agent client asks and which binary serves the
@@ -170,6 +184,7 @@ func Start(open func(url string) error) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{ln: ln, host: ln.Addr().String(), open: open, reqs: map[[32]byte]*Request{}}
+	s.ctx, s.stop = context.WithCancel(context.Background())
 	s.srv = &http.Server{Handler: s.routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second}
 	go s.srv.Serve(ln) //nolint:errcheck // Serve returns when Close is called
 	return s, nil
@@ -177,6 +192,7 @@ func Start(open func(url string) error) (*Server, error) {
 
 // Close stops the server and expires every pending request.
 func (s *Server) Close() error {
+	s.stop()
 	s.mu.Lock()
 	for _, r := range s.reqs {
 		r.finish(Expired)
@@ -300,6 +316,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /page.css", s.static("assets/page.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /favicon.svg", s.static("assets/favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("GET /api/request", s.handleGet)
+	mux.HandleFunc("GET /api/presence", s.handlePresence)
 	mux.HandleFunc("POST /api/fill", s.handleAction)
 	mux.HandleFunc("POST /api/decline", s.handleAction)
 	mux.HandleFunc("POST /api/approve", s.handleAction)
@@ -307,6 +324,43 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/not-me", s.handleNotMe)
 	mux.HandleFunc("POST /api/relay", s.handleRelay)
 	return s.guard(mux)
+}
+
+// handlePresence has no application messages. A browser closes this socket
+// when its tab closes; background tabs do not depend on JS timers. WebSockets
+// avoid exhausting HTTP/1's six connections when several request tabs are open.
+// Presence grants no claim, approval, or access to a secret value.
+func (s *Server) handlePresence(w http.ResponseWriter, req *http.Request) {
+	if req.Header.Get("Origin") != s.Origin() {
+		http.Error(w, "wrong origin", http.StatusForbidden)
+		return
+	}
+	// Browser WebSockets cannot set a custom token header. Carry the existing
+	// token in an offered subprotocol instead; never put it in a URL or echo it.
+	protocols := strings.Split(strings.Join(req.Header.Values("Sec-WebSocket-Protocol"), ","), ",")
+	for i := range protocols {
+		protocols[i] = strings.TrimSpace(protocols[i])
+	}
+	if len(protocols) != 2 || protocols[0] != "secrethandoff.presence" || !strings.HasPrefix(protocols[1], "sh-token.") || s.lookupToken(strings.TrimPrefix(protocols[1], "sh-token.")) == nil {
+		http.Error(w, "unknown request", http.StatusNotFound)
+		return
+	}
+	s.mu.Lock()
+	connected := s.pageConnected
+	s.mu.Unlock()
+	if connected == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	conn, err := websocket.Accept(w, req, &websocket.AcceptOptions{Subprotocols: []string{"secrethandoff.presence"}})
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow() //nolint:errcheck
+	conn.SetReadLimit(0)
+	release := connected()
+	defer release()
+	<-conn.CloseRead(s.ctx).Done()
 }
 
 // agentBrowsers matches the user agents of browsers that an AI agent reads
@@ -322,7 +376,7 @@ func AgentBrowser(userAgent string) bool { return agentBrowsers.MatchString(user
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ws://"+s.host+"; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -373,7 +427,10 @@ func (s *Server) static(name, contentType string) http.HandlerFunc {
 }
 
 func (s *Server) lookup(req *http.Request) *Request {
-	token := req.Header.Get(tokenHeader)
+	return s.lookupToken(req.Header.Get(tokenHeader))
+}
+
+func (s *Server) lookupToken(token string) *Request {
 	if len(token) != 43 {
 		return nil
 	}

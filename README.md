@@ -7,7 +7,7 @@ their values in chat. A private browser page asks you to fill a secret and appro
 where it can be used. The agent receives a reference; the tool applies the value
 inside approved requests and redacts returned values.
 
-**Source version: 0.0.2.** [Download signed releases](https://github.com/geland/secrethandoff/releases).
+**Source version: 0.0.3.** [Download signed releases](https://github.com/geland/secrethandoff/releases).
 Grouped local requests collect 2–8 credentials in one form. Command approval
 uses the isolated browser by default; owners may opt into Claude Code's mandatory
 prompt or Codex's configured approval policy. Codex can authorize automatically.
