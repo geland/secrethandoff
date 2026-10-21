@@ -96,8 +96,9 @@ func TestBrowserInterop(t *testing.T) {
 		skip("app/lib/sealed.ts not found")
 	}
 	os.WriteFile(script, []byte(`
-import { seal, sealedInfo, pairingCode, fillProof, confirmationCode, fromBase64Url, toBase64Url } from "`+filepath.ToSlash(sealed)+`";
-const [pk, id, policyHash, expires, fill] = process.argv.slice(2);
+import { pathToFileURL } from 'node:url';
+const { seal, sealedInfo, pairingCode, fillProof, confirmationCode, fromBase64Url, toBase64Url } = await import(pathToFileURL(process.argv[2]).href);
+const [pk, id, policyHash, expires, fill] = process.argv.slice(3);
 const ct = await seal({ recipientPublicKey: fromBase64Url(pk), info: sealedInfo(id, policyHash, Number(expires)), plaintext: new TextEncoder().encode("from the browser") });
 console.log(toBase64Url(ct));
 console.log(await pairingCode(fromBase64Url(pk)));
@@ -106,7 +107,7 @@ console.log(await confirmationCode(id, ct));
 `), 0o600)
 	r, _ := New(`{"hosts":["api.example.com"]}`, time.Minute)
 	r.ID = "CCCCCCCCCCCCCCCCCCCCCC"
-	out, err := exec.Command(node, script, b64.EncodeToString(r.publicKey), r.ID, r.PolicyHash, strconv.FormatInt(r.Expires, 10), b64.EncodeToString(r.fillSecret)).CombinedOutput()
+	out, err := exec.Command(node, script, sealed, b64.EncodeToString(r.publicKey), r.ID, r.PolicyHash, strconv.FormatInt(r.Expires, 10), b64.EncodeToString(r.fillSecret)).CombinedOutput()
 	if err != nil {
 		skip("node could not run the TypeScript module (needs Node 22.18 or newer): %s", out)
 	}

@@ -116,6 +116,11 @@ func TestCommandResultsAreCompleteWithoutText(t *testing.T) {
 					}
 					if mode == "timeout" {
 						code = -1
+						// Windows reports a terminated process with exit code 1;
+						// timed_out independently identifies the deadline outcome.
+						if os.PathSeparator == '\\' {
+							code = 1
+						}
 					}
 					if data["executed"] != true || data["exit_code"] != code || data["timed_out"] != (mode == "timeout") || data["cancelled"] != false {
 						t.Fatalf("execution outcome: %v", data)

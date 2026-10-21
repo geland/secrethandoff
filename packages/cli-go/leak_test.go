@@ -114,6 +114,9 @@ type teeReadCloser struct {
 
 func TestLeakSuite(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "secrethandoff")
+	if os.PathSeparator == '\\' {
+		bin += ".exe"
+	}
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}

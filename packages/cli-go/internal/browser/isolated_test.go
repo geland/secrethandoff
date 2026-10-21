@@ -24,7 +24,7 @@ func fakeMac(t *testing.T, installed bool) *[][]string {
 	t.Cleanup(func() { statFile, goos, startCmd = oldStat, oldGOOS, oldStart; Close() })
 	goos = "darwin"
 	statFile = func(p string) (fs.FileInfo, error) {
-		if installed && p == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" {
+		if installed && p == filepath.Join("/Applications", "Google Chrome.app/Contents/MacOS/Google Chrome") {
 			return fakeInfo{}, nil
 		}
 		return nil, errors.New("not found")

@@ -26,7 +26,7 @@ func TestClientCommandApproval(t *testing.T) {
 		{"desktop wrong client", "codex", "other-client", "0.162.0-alpha.17.2", "absolute", false},
 		{"desktop implicit dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "", false},
 		{"desktop relative dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", ".", false},
-		{"desktop unclean dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "/tmp/../tmp", false},
+		{"desktop unclean dir", "codex", "codex-mcp-client", "0.162.0-alpha.17.2", "unclean", false},
 		{"desktop previous build", "codex", "codex-mcp-client", "0.162.0-alpha.17.1", "absolute", false},
 		{"desktop next build", "codex", "codex-mcp-client", "0.162.0-alpha.17.3", "absolute", false},
 		{"desktop stable unverified", "codex", "codex-mcp-client", "0.162.0", "absolute", false},
@@ -39,7 +39,7 @@ func TestClientCommandApproval(t *testing.T) {
 		{"Codex prerelease", "codex", "codex-mcp-client", "0.155.1-preview", "absolute", false},
 		{"Codex implicit dir", "codex", "codex-mcp-client", "0.155.1", "", false},
 		{"Codex relative dir", "codex", "codex-mcp-client", "0.155.1", ".", false},
-		{"Codex unclean dir", "codex", "codex-mcp-client", "0.155.1", "/tmp/../tmp", false},
+		{"Codex unclean dir", "codex", "codex-mcp-client", "0.155.1", "unclean", false},
 		{"browser default", "", "claude-code", "2.1.284", "absolute", false},
 		{"invalid mode", "auto", "claude-code", "2.1.284", "absolute", false},
 		{"unknown host", "claude-code", "test", "2.1.284", "absolute", false},
@@ -61,6 +61,10 @@ func TestClientCommandApproval(t *testing.T) {
 			dir := tc.dir
 			if dir == "absolute" {
 				dir, _ = os.Getwd()
+			}
+			if dir == "unclean" {
+				dir, _ = os.Getwd()
+				dir += string(os.PathSeparator) + "." + string(os.PathSeparator)
 			}
 			// This is a transport-level test, not evidence of a real human click.
 			out, _ := f.call("run_with_secret", map[string]any{
