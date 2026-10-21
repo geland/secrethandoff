@@ -1,5 +1,5 @@
 {
-  "source_commit": "eb64c5b604baa57cff5349330f5eb0c3d96665f4",
+  "source_commit": "fdf106652e6d8f74578cdf5332eb2e9369b4aaf3",
   "export": "allowlisted committed files; no prior Git history",
   "sha256": {
     ".github/workflows/release-cli.yml": "28543d191311b87bff85e05e66853b22b2ff62abbedd3a3519b7f895e631ac52",
@@ -86,7 +86,7 @@
     "packages/cli-go/internal/secrets/secrets_test.go": "dce5beffd97cfc8d21a9c660121a58480695a228364179e0c9b137c81896d992",
     "packages/cli-go/internal/secrets/store.go": "56ea6cc2ba06ca8d044f837de2e72c9564cd29aac17fc279e500b5f17bc207eb",
     "packages/cli-go/leak_launcher_unix_test.go": "652deeaf190580938aad7f1cfc518b150b2052fc82241a47375b63505ca53592",
-    "packages/cli-go/leak_launcher_windows_test.go": "438a9a111725df4473b82fc9ccce9db91800dafde5f63a8103c61f737a2cfc9a",
+    "packages/cli-go/leak_launcher_windows_test.go": "687db31c6cc8073b714bb79987cf8b9494d66a78ca0ca398a808766e0ba46235",
     "packages/cli-go/leak_test.go": "04bee7f019b43bdb3fda0a537114aa9eb6d6aef0b1ae3c64e9efb0c2bd7f7a1b",
     "packages/cli-go/lifecycle_test.go": "76dd593c1922a20df34543197f0d27d7d6feec1fdddf225a68b4160ee3c58491",
     "packages/cli-go/main.go": "c320d9a1d84d5263355e9beb55376bec1f08e46e5486bc31ae0ca14deefcb39f",
