@@ -185,7 +185,7 @@ func TestHandshakeAndTools(t *testing.T) {
 			t.Fatalf("%s duplicates shared server instructions", tool.Name)
 		}
 	}
-	if strings.Join(names, ",") != "confirm_secret,forget_secret,http_request,list_secrets,proxy_settings,request_secret,run_with_secret,wait_for_secret" {
+	if strings.Join(names, ",") != "confirm_secret,forget_secret,http_request,list_secrets,proxy_settings,request_secret,request_secrets,run_with_secret,wait_for_secret" {
 		t.Fatalf("tools = %v", names)
 	}
 }
@@ -202,7 +202,7 @@ func TestAppCard(t *testing.T) {
 			linked[tool.Name] = true
 		}
 	}
-	if len(linked) != 4 || !linked["request_secret"] || !linked["wait_for_secret"] || !linked["run_with_secret"] || !linked["confirm_secret"] {
+	if len(linked) != 5 || !linked["request_secrets"] || !linked["request_secret"] || !linked["wait_for_secret"] || !linked["run_with_secret"] || !linked["confirm_secret"] {
 		t.Fatalf("tools linked to the card: %v", linked)
 	}
 	res, err := f.cs.ReadResource(f.ctx, &mcp.ReadResourceParams{URI: appcard.URI})

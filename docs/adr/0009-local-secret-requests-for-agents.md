@@ -1,6 +1,7 @@
 # ADR 0009: Local secret requests for AI agents
 
 - Status: Accepted
+- Partially superseded for Codex command authorization by [ADR 0014](0014-codex-owner-policy-approval.md)
 - Date: 2026-10-07
 - Threat model: [`docs/security/sealed-request-threat-model.md`](../security/sealed-request-threat-model.md), revision 2
 - Plan: [`docs/plans/sealed-requests-plan.md`](../plans/sealed-requests-plan.md)

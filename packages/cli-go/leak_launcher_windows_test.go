@@ -3,18 +3,32 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"testing"
 )
 
-// writeLauncher writes a batch file that runs the test binary's browser
-// helper. The page URL contains no characters that cmd treats as special.
+// The browser launcher executes a program directly, so Windows needs an
+// executable rather than a batch file. Keep the private URL only in memory.
 func writeLauncher(t *testing.T, path, self string) string {
 	t.Helper()
-	script := "@echo off\r\nset SECRETHANDOFF_HELPER_URL_ARG=%~1\r\n\"" + self + "\" -test.run=^^TestLeakHelperBrowser$\r\n"
-	path += ".cmd"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+	source := path + ".go"
+	script := fmt.Sprintf(`package main
+import ("os"; "os/exec")
+func main() {
+ if len(os.Args) != 2 { os.Exit(1) }
+ cmd := exec.Command(%q, "-test.run=^TestLeakHelperBrowser$")
+ cmd.Env = append(os.Environ(), "SECRETHANDOFF_HELPER_URL_ARG="+os.Args[1])
+ if cmd.Run() != nil { os.Exit(1) }
+}
+`, self)
+	if err := os.WriteFile(source, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	path += ".exe"
+	if _, err := exec.Command("go", "build", "-o", path, source).CombinedOutput(); err != nil {
+		t.Fatal("could not build the Windows leak-test browser launcher")
 	}
 	return path
 }

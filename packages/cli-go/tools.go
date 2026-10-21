@@ -88,6 +88,7 @@ type nameInput struct {
 }
 
 func addSecretTools(server *mcp.Server, s *session) {
+	addGroupTool(server, s)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "request_secret",
 		Meta:        appcard.ToolMeta(),
@@ -139,6 +140,11 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 		ttl = time.Duration(in.ExpiresInMinutes) * time.Minute
 	}
 
+	s.mu.Lock()
+	if fr := s.fills[in.Name]; fr != nil && len(fr.req.Fields) != 0 {
+		s.cancelGroupLocked(fr)
+	}
+	s.mu.Unlock()
 	for _, info := range s.store.List() {
 		if info.Name == in.Name && info.Policy.Hash() == p.Hash() {
 			return s.ready(in.Name, p), nil, nil
@@ -183,6 +189,9 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 }
 
 func (s *session) waitLocal(ctx context.Context, name string, fr *fillRequest) *mcp.CallToolResult {
+	if len(fr.req.Fields) != 0 {
+		return s.waitGroup(ctx, fr)
+	}
 	select {
 	case <-fr.req.Done():
 	case <-time.After(s.wait):
@@ -243,9 +252,10 @@ func (s *session) ready(name string, p policy.Policy) *mcp.CallToolResult {
 
 func (s *session) listSecrets(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 	type pendingInfo struct {
-		Name         string `json:"name"`
-		Status       string `json:"status"`
-		Presentation string `json:"presentation"`
+		Name         string   `json:"name"`
+		Status       string   `json:"status"`
+		Presentation string   `json:"presentation"`
+		Names        []string `json:"names,omitempty"`
 	}
 	out := struct {
 		Status  string         `json:"status"`
@@ -255,7 +265,11 @@ func (s *session) listSecrets(context.Context, *mcp.CallToolRequest, struct{}) (
 	s.mu.Lock()
 	for name, fr := range s.fills {
 		if fr.req.State() == localpage.Pending {
-			out.Pending = append(out.Pending, pendingInfo{Name: name, Status: "pending", Presentation: "browser_page"})
+			if len(fr.req.Fields) == 0 {
+				out.Pending = append(out.Pending, pendingInfo{Name: name, Status: "pending", Presentation: "browser_page"})
+			} else if name == fr.req.Name {
+				out.Pending = append(out.Pending, pendingInfo{Name: name, Status: "pending", Presentation: "browser_page", Names: groupNames(fr)})
+			}
 		}
 	}
 	for name, rr := range s.remotes {
@@ -280,6 +294,15 @@ func (s *session) forgetSecret(ctx context.Context, _ *mcp.CallToolRequest, in n
 	}
 	s.mu.Lock()
 	fr, rr := s.fills[in.Name], s.remotes[in.Name]
+	// A grouped request is one lifecycle unit. Cancel before erasure so a
+	// concurrent submission or an old "not me" action cannot restore it.
+	group := fr != nil && len(fr.req.Fields) != 0
+	groupRedactor := s.store.Redactor()
+	if group {
+		fr.req.Cancel()
+		groupRedactor = s.store.Redactor()
+		s.cancelGroupLocked(fr)
+	}
 	delete(s.fills, in.Name)
 	delete(s.remotes, in.Name)
 	if fr != nil {
@@ -294,9 +317,15 @@ func (s *session) forgetSecret(ctx context.Context, _ *mcp.CallToolRequest, in n
 	}
 	// Snapshot after any in-flight fill finishes, before erasing its value.
 	redactor := s.store.Redactor()
+	if group {
+		redactor = groupRedactor
+	}
 	status, message := "forgotten", fmt.Sprintf("%s is erased from memory. Its open request was cancelled.", in.Name)
 	if !s.store.Forget(in.Name) && fr == nil && rr == nil {
 		status, message = "missing", fmt.Sprintf("There is no secret named %s.", in.Name)
+	}
+	if group {
+		message = "The grouped request and all its secret values were erased from memory."
 	}
 	s.mu.Unlock()
 	if rr != nil {

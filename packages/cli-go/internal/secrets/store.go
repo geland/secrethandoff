@@ -57,6 +57,38 @@ func (s *Store) Put(name string, value []byte, p policy.Policy) error {
 	return nil
 }
 
+// PutMany publishes a whole validated group under one lock. Readers never see
+// a partially submitted group. Values are copied; callers wipe their buffers.
+func (s *Store) PutMany(values map[string][]byte, p policy.Policy) error {
+	for name, value := range values {
+		if !NamePattern.MatchString(name) || len(value) == 0 {
+			return errors.New("invalid secret group")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for name, value := range values {
+		if old := s.items[name]; old != nil {
+			wipe(old.value)
+		}
+		s.items[name] = &entry{value: append([]byte(nil), value...), info: Info{Name: name, Policy: p, FilledAt: now}}
+	}
+	return nil
+}
+
+// ForgetMany erases a group atomically, including when cancellation races fill.
+func (s *Store) ForgetMany(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range names {
+		if e := s.items[name]; e != nil {
+			wipe(e.value)
+			delete(s.items, name)
+		}
+	}
+}
+
 // Use calls fn with the secret value and its policy. The value must not
 // escape fn. Callers must pass any text that leaves the binary through a
 // Redactor.

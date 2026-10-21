@@ -7,11 +7,15 @@ their values in chat. A private browser page asks you to fill a secret and appro
 where it can be used. The agent receives a reference; the tool applies the value
 inside approved requests and redacts returned values.
 
-**Status: source available for inspection; no public binary release yet.** This is
-an unreleased source checkpoint, not an independent security audit or a release
-approval. The independent phone/remote protocol review and clean-machine/client
-release checks remain open. Do not assume that every client in the design matrix
-has passed acceptance.
+**Source version: 0.0.2.** [Download signed releases](https://github.com/geland/secrethandoff/releases).
+Grouped local requests collect 2–8 credentials in one form. Command approval
+uses the isolated browser by default; owners may opt into Claude Code's mandatory
+prompt or Codex's configured approval policy. Codex can authorize automatically.
+Secret values never enter chat. Phone/remote relay remains disabled on the public
+service pending its independent review; it is not enabled by this release.
+
+Release checks establish the tested code and package behavior, not a completed
+independent security audit or acceptance of every client's UI.
 
 ## Build and test
 

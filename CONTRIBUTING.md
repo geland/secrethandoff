@@ -10,8 +10,8 @@ new decision record and regression coverage. Keep tool output free of secrets,
 request tokens, and local fill links. Secrets and private keys remain in memory.
 
 No administrator rights, system service, trust-store changes, or telemetry may be
-introduced into normal setup. Human policy and command approval must remain
-mandatory. The isolated browser and loopback protections are product requirements.
+introduced into normal setup. Human-approved policy and owner-selected command authorization remain
+mandatory (ADR 0013–0015). The isolated browser and loopback protections are product requirements.
 
 Public patches do not automatically enter a release. The maintainer reviews code
 and release workflow changes before merging. Do not run untrusted pull requests

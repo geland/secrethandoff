@@ -187,7 +187,7 @@ Each table lists the threat, the adversary, the goal at risk, the mitigation, an
 | ID | Threat | Adv. | Goal | Mitigation | Residual risk |
 |---|---|---|---|---|---|
 | T-01 | A tool returns the plaintext to the model, for example in a `get_secret` result or an error message. | X1 | G2 | Required: the binary has no tool or API that returns plaintext. Error text never contains the secret value. A test sends a known value through every tool and asserts that no output contains it. | None, if the test covers every tool and error path. |
-| T-02 | The model writes a secret that `run_with_secret` released to a file, then reads the file with another tool. Output redaction does not see this. | X1 | G2 | Prefer `http_request` or the proxy (G7), where the agent never holds the value. For `run_with_secret`, put the secret in an environment variable or stdin, never in arguments, and ask the human to approve each command on the local page. | Accepted for `run_with_secret` (R-01). |
+| T-02 | The model writes a secret that `run_with_secret` released to a file, then reads the file with another tool. Output redaction does not see this. | X1 | G2 | Prefer `http_request` or the proxy (G7), where the agent never holds the value. For `run_with_secret`, put the secret in an environment variable or stdin, never in arguments, and require the owner-selected command approval boundary (ADR 0013 and ADR 0014). | Accepted for `run_with_secret` (R-01). |
 | T-03 | The model encodes the secret (base64, hex, split, encrypted) so that redaction misses it. | X1 | G2 | Redact the raw, base64, base64url, hex, and URL-encoded forms. Treat redaction as a defense against accidents only. | Accepted, as T-02. |
 | T-04 | Prompt injection makes the agent request a high-value secret with a believable reason, for example "paste the production database password to fix the outage". | X1 | G2, G7 | Every fill page labels the reason as text from the agent. Every fill page shows the use policy (the hosts, paths, and methods that will receive the secret) next to the input. Filling the form approves that policy. There is no separate approval step. | The human makes the final decision (R-03). |
 | T-05 | The model widens the use policy after the fill, for example by sending the secret to a new host. | X1 | G7 | The binary enforces the policy that the human saw at fill time. In relay mode, the policy hash is also in the request link and the HPKE info string. A policy change needs a new request and a new fill. | None. |
@@ -241,7 +241,7 @@ Each table lists the threat, the adversary, the goal at risk, the mitigation, an
 | T-44 | Another local user connects to the loopback ports and uses the page or the proxy. | X10 | G3, G7 | The page needs the token. The proxy needs a random proxy credential for each session, given to agent commands in the proxy URL. Without it, the proxy refuses the request. | None. |
 | T-53 | The human pastes a secret into the chat instead of using a fill page. | X2 | G2 | Required for Claude Code: a `UserPromptSubmit` hook blocks a prompt that contains a likely secret, so the model never receives it. The block message tells the human that the secret is still in the local session history and to replace it if it matters. Guidance layers 1 to 4 steer the agent to `request_secret`. | The agent client saves the text to disk before the hook runs (R-07). Clients without hooks send the text to the model. |
 | T-45 | The computer has no display, or the browser launcher fails, so the binary prints the local URL as a fallback. | X1, X2 | G5, G8 | Never print a local page token. Without a display, switch to relay remote mode, which has the controls for a link in the transcript (T-14, T-19). | Remote-mode residual risks apply. |
-| T-52 | `run_with_secret` starts commands from the MCP process, which runs outside the agent client's sandbox. The model can use it to run a command that the sandbox would block. | X1 | — | Required: the local page shows the full argument vector, the working directory, and the secret names, and the human approves each command. ADR 0013 permits an owner-selected interactive Claude Code host to gate the exact tools/call with its mandatory human-interaction annotation; other hosts retain the page. No shell is used, so there is no expansion or chaining. Approval cannot be remembered for later commands. | A human who approves a harmful command; a compromised or owner-selected custom host that synthesizes approval. |
+| T-52 | `run_with_secret` starts commands from the MCP process, which runs outside the agent client's sandbox. The model can use it to run a command that the sandbox would block. | X1 | — | Required: the local page shows the full argument vector, the working directory, and the secret names, and the human approves each command. ADR 0013 permits an owner-selected interactive Claude Code host to gate the exact tools/call with its mandatory human-interaction annotation; ADR 0014 also permits owner-selected Codex policy authorization, including allow rules, hooks, and automatic review. Other hosts retain the page. No shell is used, so there is no expansion or chaining. Browser grants cannot be reused; Codex authorizes each call under the owner's current policy. | A human who approves a harmful command; a compromised host or policy; owner-selected automatic authorization in Codex mode. |
 
 ### 7.6 Remote injection gateway (B7), later phase
 
@@ -295,7 +295,7 @@ The Claude Code mod card and the MCP App card show a request in the chat. Neithe
 
 | ID | Threat | Adv. | Goal | Mitigation | Residual risk |
 |---|---|---|---|---|---|
-| T-56 | The agent client, the MCP Apps host, or another plugin reads or changes what a card shows. | X11, X4 | G1 | A card shows only the tool call's arguments and result text, which the agent client already has. It has no input field and makes no requests: the MCP App card declares no CSP domains, and a test fails if its HTML has an input, a text area, or a network call. In remote mode it shows the pairing code, not the link. | A changed card can show a wrong status. The local page stays the authority for secret entry; command approval is the browser page or the owner-selected host boundary in ADR 0013, never the card. |
+| T-56 | The agent client, the MCP Apps host, or another plugin reads or changes what a card shows. | X11, X4 | G1 | A card shows only the tool call's arguments and result text, which the agent client already has. It has no input field and makes no requests: the MCP App card declares no CSP domains, and a test fails if its HTML has an input, a text area, or a network call. In remote mode it shows the pairing code, not the link. | A changed card can show a wrong status. The local page stays the authority for secret entry; command approval is the browser page or the owner-selected host boundary in ADR 0013 or ADR 0014, never the card. |
 
 ## 8. Accepted residual risks
 
@@ -354,7 +354,7 @@ The feature ships in phases. Each phase ships only when its gates pass. Each pha
 
 | Gate | Condition | Threats |
 |---|---|---|
-| GG-01 | A test sends a known value through every tool, error path, stdout, stderr, and redaction encoding, and asserts that no output contains it. Browser grants run once. Owner-selected host approval additionally needs the ADR 0013 metadata/fallback tests, negative live-host probe, and interactive human-only acceptance before enabling it. | T-01, T-03, T-06, T-27, T-52 |
+| GG-01 | A test sends a known value through every tool, error path, stdout, stderr, and redaction encoding, and asserts that no output contains it. Browser grants run once. Claude host approval needs ADR 0013 metadata/fallback tests, its negative live-host probe, and interactive acceptance. Codex policy opt-in needs ADR 0014 fallback/redaction tests and live allow/deny delivery; desktop rendering remains a separate owner test. | T-01, T-03, T-06, T-27, T-52 |
 | GG-02 | Tests for the loopback server cover the Host check, the Origin check, `Sec-Fetch-Site`, missing CORS headers, one-time tokens, and the "This was not me" control. | T-42, T-43, T-44 |
 | GG-03 | `http_request` and the proxy pass tests for exact host matching, cross-host redirects, header reflection, the proxy credential, and a CA with name constraints that is not in the system trust store. | T-26, T-27, T-29, T-44 |
 | GG-04 | Install and first use need no administrator rights on macOS, Windows, and Linux. | G9 |
@@ -427,3 +427,22 @@ The feature ships in phases. Each phase ships only when its gates pass. Each pha
 ### Revision 1 (2026-10-07)
 
 - First draft. The service relayed every request, and the request link was in the transcript in all cases.
+
+## Codex owner-policy command approval update (ADR 0014, 2026-10-09)
+
+For T-02, T-52, T-56, and GG-01, browser approval remains the default and
+Claude's mandatory interactive mode retains ADR 0013. The owner may instead
+select Codex policy authorization under ADR 0014. Its allow rules, hooks, and
+reviewer may authorize a command without a human click. A host denial prevents
+delivery of tools/call; no generic elicitation response, card action, or agent
+approval argument grants execution. The binary requires the selected mode,
+verified client/version range, and explicit clean absolute directory. Tests
+must cover allow and deny delivery, fallback, complete redacted outcomes, and
+raw-transport leaks; desktop prompt rendering needs owner acceptance separately.
+
+ClientInfo is self-reported. A compromised host or owner policy, malicious
+same-user process, or an owner-selected permissive hook can authorize execution.
+This opt-in deliberately delegates consent and does not claim a fresh-human
+gate. Command execution still escapes the host sandbox (T-52) and is not confined
+by the HTTP policy (R-01). Secret-entry tokens, browser isolation, in-memory
+storage, and all cryptographic/relay boundaries remain unchanged.

@@ -6,6 +6,6 @@ threat model. Never include real secrets, credentials, local fill/pickup tokens,
 or live handoff links in source, fixtures, logs, tool results, or screenshots.
 
 Run from packages/cli-go: `go vet ./...` and `CI=1 go test -race ./...` with
-Node 24 on PATH. Human use policy and per-command approval remain mandatory.
+Node 24 on PATH. Human-approved use policy remains mandatory. Command authorization follows the owner-selected boundary in ADR 0013–0015, with isolated browser approval by default.
 No secret may enter model-visible output. Do not edit historical decisions to
 conceal a boundary change; add a new decision and tests instead.

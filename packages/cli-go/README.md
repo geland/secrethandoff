@@ -7,7 +7,7 @@ Status: phases 0 to 3 of the plan are built. No version is released yet.
 - Decision records: [ADR 0009](../../docs/adr/0009-local-secret-requests-for-agents.md) (local mode), [ADR 0010](../../docs/adr/0010-relay-for-phone-fill.md) (phone fill), [ADR 0011](../../docs/adr/0011-remote-mode-and-gateway.md) (remote mode)
 - Plan: [`docs/plans/sealed-requests-plan.md`](../../docs/plans/sealed-requests-plan.md)
 - Threat model: [`docs/security/sealed-request-threat-model.md`](../../docs/security/sealed-request-threat-model.md)
-- Invariants: the local and relay requirements in [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+- Invariants: the "Local binary invariants" and "Relay invariants" sections of [`AGENTS.md`](../../AGENTS.md)
 
 ## Commands
 
@@ -104,7 +104,7 @@ Lifecycle tools preserve human-readable text and return value-free MCP `structur
 
 | Variable | Effect |
 |---|---|
-| `SECRETHANDOFF_COMMAND_APPROVAL` | Default or `browser`: approve commands on the local page. `claude-code`: opt into Claude Code's mandatory per-call permission prompt, for the supported interactive host described below. Unknown values keep browser approval. |
+| `SECRETHANDOFF_COMMAND_APPROVAL` | Default or `browser`: approve commands on the local page. `claude-code`: opt into Claude Code's mandatory per-call permission prompt, for the supported interactive host described below. `codex`: opt into Codex approval settings, including automatic review and hooks. Unknown values keep browser approval. |
 | `SECRETHANDOFF_ISOLATED_BROWSER` | `0` opens fill pages in the default browser instead of the isolated window. The isolated window is a separate Chrome, Edge, Brave, or Chromium window with a temporary profile and no extensions, so AI browser extensions cannot read the page. |
 | `SECRETHANDOFF_NO_BROWSER` | Act as if no browser is available. `request_secret` uses remote mode. |
 | `SECRETHANDOFF_BROWSER` | One program to open fill pages, run with the URL as its only argument. |
@@ -116,7 +116,7 @@ Lifecycle tools preserve human-readable text and return value-free MCP `structur
 Secret entry always stays on the Secret Handoff page. To move command approval
 into **interactive Claude Code 2.1.284 or later in the 2.1 series**, the owner can
 set `SECRETHANDOFF_COMMAND_APPROVAL=claude-code` in the environment of the MCP
-server and start a fresh session. Do not let the agent enable it for you. This
+server and start a fresh session. Enable it only on your explicit instruction. This
 mode trusts that specific host to collect your approval before calling the tool.
 It is not for an Agent SDK app or a custom permission handler: their callbacks
 can approve without a human. Client name/version are self-reported context,
@@ -168,3 +168,70 @@ CGO_ENABLED=0 go build -trimpath -o secrethandoff .
 - `leak_test.go` is the leak suite (gate GG-01). It must pass before a release.
 - With `CI` set, the relay test runs the TypeScript HPKE code in Node 22.18 or newer, and fails if it cannot.
 - The MIT license is in `LICENSE`.
+
+## Command approval in Codex
+
+The owner can select `SECRETHANDOFF_COMMAND_APPROVAL=codex` for stable Codex
+0.155.1 or later in the 0.155 series, or the exact desktop build
+`0.162.0-alpha.17.2` ([ADR 0015](../../docs/adr/0015-codex-desktop-approval-compatibility.md)).
+Other desktop prereleases retain browser approval. It follows Codex's configured tool approval mode,
+reviewer, and hooks; automatic authorization is allowed. It does not promise a
+fresh human click. Explicit clean absolute `dir` is required; unsupported hosts
+and versions fall back to the browser. Secret entry stays in the isolated browser.
+
+For the installed plugin, reload it and explicitly opt into its cached launch:
+
+```bash
+codex plugin add secrethandoff@secrethandoff
+python3 ~/Projects/secrethandoff-integrations/scripts/configure_codex_approval.py codex \
+  --plugin-dir ~/.codex/plugins/cache/secrethandoff/secrethandoff/0.0.2
+```
+
+Start a fresh chat. Reinstallation resets the opt-in, so rerun the helper after
+reload. Use `browser` instead of `codex` to restore browser command approval.
+The helper leaves all host approval settings unchanged. For a standalone MCP
+entry, put `SECRETHANDOFF_COMMAND_APPROVAL = "codex"` in its `env` table.
+
+A completed command reports `presentation: client_policy`, `approval: host_policy`,
+its exit code, and redacted output. These indicate host authorization, not a
+human gesture. If Codex denies the tool, it never reaches the binary. The command
+still runs outside the host sandbox and can send its credential anywhere.
+See [ADR 0014](../../docs/adr/0014-codex-owner-policy-approval.md).
+
+## Grouped local requests
+
+`request_secrets` collects **2–8 credentials** in one isolated browser form.
+Supply a unique group name, named fields, one reason and policy, and optionally
+`expires_in_minutes` (1–60; default 10). Example tool arguments:
+
+```json
+{
+  "name": "TEST_LOGIN",
+  "secrets": [
+    {"name": "TEST_USERNAME", "label": "Username"},
+    {"name": "TEST_PASSWORD", "label": "Password"}
+  ],
+  "reason": "Test the grouped form using dummy credentials.",
+  "policy": {"hosts": ["api.example.com"], "methods": ["POST"], "paths": ["/login"]}
+}
+```
+
+All fields are required and become ready in one atomic store update. Each is
+usable separately by name, including both in one HTTP body or command environment.
+Combined values are limited to 32 KiB, and the JSON submission must fit 64 KiB.
+Each field starts masked; optional multiline entry is explicitly visible.
+Repeat identical arguments to rejoin, or call `wait_for_secret` with the group
+name. `list_secrets` lists ready member names or one pending group with its names.
+
+A group is one lifecycle unit. `forget_secret` with its group name **or any
+member** cancels the request and erases every member. Replacing a member with a
+new request also cancels and erases the old group. Filled values have no timer;
+only the open request has a deadline. Phone/headless relay fill is not supported
+for groups; those requests fail before creating a relay or exposing a link.
+Single-secret requests and command approval modes are unchanged.
+
+See [ADR 0016](../../docs/adr/0016-grouped-local-requests.md). After a plugin reload,
+start a fresh chat and ask: “Request TEST_LOGIN with TEST_USERNAME (Username) and
+TEST_PASSWORD (Password) together using request_secrets. Allow only POST /login
+on api.example.com. Use dummy values, change no files, and do not run init.
+Wait until ready, list the names, then forget TEST_LOGIN. Never show values.”
