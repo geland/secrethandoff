@@ -185,18 +185,32 @@ func (s *session) requestSecret(ctx context.Context, call *mcp.CallToolRequest, 
 	}
 	s.mu.Unlock()
 
-	return s.waitLocal(ctx, in.Name, fr), nil, nil
+	return s.waitLocal(ctx, call, in.Name, fr), nil, nil
 }
 
-func (s *session) waitLocal(ctx context.Context, name string, fr *fillRequest) *mcp.CallToolResult {
-	if len(fr.req.Fields) != 0 {
-		return s.waitGroup(ctx, fr)
+func (s *session) awaitLocalFill(ctx context.Context, call *mcp.CallToolRequest, req *localpage.Request) {
+	budget := s.wait
+	if !s.waitOverride && call != nil && call.Session != nil {
+		// Claude Code's stdio client can hold a call open for the default
+		// request lifetime. It can also deliver results from background calls.
+		if p := call.Session.InitializeParams(); p != nil && p.ClientInfo != nil && p.ClientInfo.Name == "claude-code" {
+			budget = 10 * time.Minute
+		}
 	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
 	select {
-	case <-fr.req.Done():
-	case <-time.After(s.wait):
+	case <-req.Done():
+	case <-timer.C:
 	case <-ctx.Done():
 	}
+}
+
+func (s *session) waitLocal(ctx context.Context, call *mcp.CallToolRequest, name string, fr *fillRequest) *mcp.CallToolResult {
+	if len(fr.req.Fields) != 0 {
+		return s.waitGroup(ctx, call, fr)
+	}
+	s.awaitLocalFill(ctx, call, fr.req)
 	switch fr.req.State() {
 	case localpage.Filled:
 		if !s.store.Has(name) {
@@ -214,7 +228,7 @@ func (s *session) waitLocal(ctx context.Context, name string, fr *fillRequest) *
 	}
 }
 
-func (s *session) waitForSecret(ctx context.Context, _ *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
+func (s *session) waitForSecret(ctx context.Context, call *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
 	if !secrets.NamePattern.MatchString(in.Name) {
 		return s.text(true, "Invalid secret name."), nil, nil
 	}
@@ -225,7 +239,7 @@ func (s *session) waitForSecret(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return s.waitRemote(ctx, in.Name, rr), nil, nil
 	}
 	if fr != nil {
-		return s.waitLocal(ctx, in.Name, fr), nil, nil
+		return s.waitLocal(ctx, call, in.Name, fr), nil, nil
 	}
 	for _, info := range s.store.List() {
 		if info.Name == in.Name {

@@ -45,7 +45,7 @@ func (s *session) cancelGroupLocked(fr *fillRequest) {
 	}
 }
 
-func (s *session) requestSecrets(ctx context.Context, _ *mcp.CallToolRequest, in groupInput) (*mcp.CallToolResult, any, error) {
+func (s *session) requestSecrets(ctx context.Context, call *mcp.CallToolRequest, in groupInput) (*mcp.CallToolResult, any, error) {
 	if !secrets.NamePattern.MatchString(in.Name) {
 		return s.text(true, "Invalid grouped request name."), nil, nil
 	}
@@ -89,7 +89,7 @@ func (s *session) requestSecrets(ctx context.Context, _ *mcp.CallToolRequest, in
 	fr := s.fills[in.Name]
 	if fr != nil && fr.policyHash == p.Hash() && reflect.DeepEqual(fr.req.Fields, in.Secrets) && fr.req.Reason == reason && fr.req.GroupTTL == ttl && (fr.req.State() == localpage.Pending || fr.req.State() == localpage.Filled) {
 		s.mu.Unlock()
-		return s.waitGroup(ctx, fr), nil, nil
+		return s.waitGroup(ctx, call, fr), nil, nil
 	}
 	if s.store.Has(in.Name) {
 		s.mu.Unlock()
@@ -131,15 +131,11 @@ func (s *session) requestSecrets(ctx context.Context, _ *mcp.CallToolRequest, in
 		s.fills[name] = fr
 	}
 	s.mu.Unlock()
-	return s.waitGroup(ctx, fr), nil, nil
+	return s.waitGroup(ctx, call, fr), nil, nil
 }
 
-func (s *session) waitGroup(ctx context.Context, fr *fillRequest) *mcp.CallToolResult {
-	select {
-	case <-fr.req.Done():
-	case <-time.After(s.wait):
-	case <-ctx.Done():
-	}
+func (s *session) waitGroup(ctx context.Context, call *mcp.CallToolRequest, fr *fillRequest) *mcp.CallToolResult {
+	s.awaitLocalFill(ctx, call, fr.req)
 	status, message := "pending", "Waiting for all fields on one Secret Handoff page. Call wait_for_secret with the grouped request name."
 	switch fr.req.State() {
 	case localpage.Filled:
