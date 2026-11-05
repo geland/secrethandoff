@@ -109,6 +109,7 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
     return blocks.map((b) => (b && typeof b.text === "string" ? b.text : "")).join("\n");
   };
   const firstSentence = (t) => { const m = /^.*?[.!?](?=\s|$)/s.exec(t.trim()); return (m ? m[0] : t.trim()).slice(0, 300); };
+  const pendingBrowser = { tone: "wait", text: "This check ended before submission. The agent can check again." };
 
   // The same reading of the binary's result text as the Claude Code card.
   const statusOf = (text, isError, data) => {
@@ -135,7 +136,7 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
   switch (state?.status) {
     case 'ready': return { tone: 'ok', text: 'Ready. The agent uses the secret by name and never sees it.' }
     case 'pending': return state.presentation === 'browser_page'
-      ? { tone: 'wait', text: 'Still waiting for you on the Secret Handoff page in your browser.' }
+      ? pendingBrowser
       : state.presentation === 'client_prompt' || state.presentation === 'remote_link'
         ? { tone: 'wait', text: 'Waiting for you on the Secret Handoff page on your other device.', code: pairing }
         : { tone: 'wait', text: 'Waiting for Secret Handoff.' }
@@ -152,7 +153,7 @@ dd .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 3px
     if (/has no browser/.test(text) || /agent client is showing a page/.test(text)) return { tone: "wait", text: "Open the link on your phone or another computer. Continue only if it shows this pairing code.", code: pairing, remote: true };
     if (/^Waiting for the user.*other device/.test(text)) return { tone: "wait", text: "Still waiting for you on the Secret Handoff page on your other device." };
     if (/^Waiting for the user to approve/.test(text)) return { tone: "wait", text: "Waiting for you to approve the command on the page in your browser." };
-    if (/^Waiting for the user/.test(text)) return { tone: "wait", text: "Still waiting for you on the page in your browser." };
+    if (/^Waiting for (the user|all fields)/.test(text)) return pendingBrowser;
     if (/declined|did not approve/.test(text)) return { tone: "stop", text: kind === "run_with_secret" ? "You denied the command. It did not run." : "You declined. The agent did not get a secret." };
     if (/cancelled/.test(text)) return { tone: "stop", text: "Cancelled. Any value was discarded." };
     if (/expired/.test(text)) return { tone: "stop", text: "The request expired." };

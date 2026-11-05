@@ -21,9 +21,10 @@ type session struct {
 	available func() error
 	client    *http.Client
 	relayURL  string
-	// wait bounds how long one tool call waits for the human. Some agent
-	// clients time out tool calls after 60 seconds.
-	wait time.Duration
+	// wait is the fallback budget for clients with short tool timeouts.
+	// An explicit override also applies to local fills in Claude Code.
+	wait         time.Duration
+	waitOverride bool
 	// commandApproval is configured by the owner when starting the server,
 	// never by a tool argument. Browser approval remains the default.
 	commandApproval string
@@ -51,8 +52,10 @@ type fillRequest struct {
 
 func newSession() *session {
 	wait := 45 * time.Second
-	if v, err := strconv.Atoi(os.Getenv("SECRETHANDOFF_WAIT_SECONDS")); err == nil && v > 0 && v <= 600 {
-		wait = time.Duration(v) * time.Second
+	seconds, err := strconv.Atoi(os.Getenv("SECRETHANDOFF_WAIT_SECONDS"))
+	waitOverride := err == nil && seconds > 0 && seconds <= 600
+	if waitOverride {
+		wait = time.Duration(seconds) * time.Second
 	}
 	return &session{
 		store:           secrets.NewStore(),
@@ -61,6 +64,7 @@ func newSession() *session {
 		client:          newHTTPClient(nil),
 		relayURL:        relayURLFromEnv(),
 		wait:            wait,
+		waitOverride:    waitOverride,
 		commandApproval: os.Getenv("SECRETHANDOFF_COMMAND_APPROVAL"),
 		fills:           map[string]*fillRequest{},
 		approvals:       map[string]*localpage.Request{},

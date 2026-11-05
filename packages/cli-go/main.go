@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-const version = "0.0.3"
+const version = "0.0.4"
 
 const usage = `secrethandoff gives secrets to AI agents without the value entering the chat.
 

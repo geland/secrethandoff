@@ -109,7 +109,7 @@ Lifecycle tools preserve human-readable text and return value-free MCP `structur
 | `SECRETHANDOFF_NO_BROWSER` | Act as if no browser is available. `request_secret` uses remote mode. |
 | `SECRETHANDOFF_BROWSER` | One program to open fill pages, run with the URL as its only argument. |
 | `SECRETHANDOFF_RELAY_URL` | Relay service URL. Default: `https://secrethandoff.com`. Use a local `wrangler dev` URL for tests. |
-| `SECRETHANDOFF_WAIT_SECONDS` | How long `request_secret` and `wait_for_secret` wait for a fill, 1 to 600 seconds. Default: 45. |
+| `SECRETHANDOFF_WAIT_SECONDS` | Override the wait for a fill or browser approval, 1 to 600 seconds. Defaults to 600 seconds for local fills in Claude Code and 45 seconds for other waits. A submission, decline, cancellation, or expiry ends a fill wait early. |
 
 ## Command approval in Claude Code
 

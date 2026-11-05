@@ -70,6 +70,82 @@ func TestLifecycleWaitDoesNotCreateOrChangeRequest(t *testing.T) {
 	f.assertNoLeak()
 }
 
+func TestClaudeCodeReceivesLateBrowserSubmission(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+		body any
+	}{
+		{"request_secret", map[string]any{"name": "TOKEN", "reason": "Test", "policy": stripePolicy}, map[string]string{"value": testSecret}},
+		{"request_secrets", groupArgs, map[string]any{"values": groupValues}},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			t.Setenv("SECRETHANDOFF_WAIT_SECONDS", "")
+			f := newFixtureClient(t, nil, &mcp.Implementation{Name: "claude-code", Version: "2.1.284"})
+			f.s.wait = 5 * time.Millisecond // Scale down the old wait budget.
+			pages := make(chan string, 1)
+			f.s.open = func(u string) error { pages <- u; return nil }
+			ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+			defer cancel()
+
+			call := func(tool string, args map[string]any) <-chan *mcp.CallToolResult {
+				result := make(chan *mcp.CallToolResult, 1)
+				go func() {
+					res, err := f.cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+					if err != nil {
+						res = nil
+					}
+					result <- res
+				}()
+				return result
+			}
+			requested := call(tc.tool, tc.args)
+			var page *groupPage
+			select {
+			case u := <-pages:
+				page = claimGroupPage(t, u)
+			case <-ctx.Done():
+				t.Fatal("request did not open a page")
+			}
+			waited := call("wait_for_secret", map[string]any{"name": tc.args["name"]})
+			select {
+			case <-requested:
+				t.Fatal("request ended before submission")
+			case <-waited:
+				t.Fatal("follow-up wait ended before submission")
+			case <-time.After(50 * time.Millisecond):
+			}
+			if page.post("fill", tc.body) != 200 {
+				t.Fatal("browser submission failed")
+			}
+			for _, result := range []<-chan *mcp.CallToolResult{requested, waited} {
+				res := <-result
+				if res == nil || res.IsError {
+					t.Fatal("no successful MCP result after submission")
+				}
+				if data, ok := res.StructuredContent.(map[string]any); !ok || data["status"] != "ready" {
+					t.Fatal("MCP did not report the submission as ready")
+				}
+				wire, err := json.Marshal(res)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.outputs = append(f.outputs, string(wire))
+				assertGroupClean(t, string(wire))
+			}
+			f.assertNoLeak()
+		})
+	}
+}
+
+func TestClaudeCodeHonorsExplicitWaitLimit(t *testing.T) {
+	t.Setenv("SECRETHANDOFF_WAIT_SECONDS", "1")
+	f := newFixtureClient(t, nil, &mcp.Implementation{Name: "claude-code", Version: "2.1.284"})
+	f.s.wait = 5 * time.Millisecond
+	f.h.set("ignore", "")
+	f.lifecycleCall("request_secret", map[string]any{"name": "TOKEN", "reason": "Test", "policy": stripePolicy}, "pending")
+}
+
 func TestForgetCancelsPendingFillAndWakesWaiter(t *testing.T) {
 	f := newFixture(t)
 	f.h.set("ignore", "")
@@ -80,7 +156,7 @@ func TestForgetCancelsPendingFillAndWakesWaiter(t *testing.T) {
 	f.s.mu.Unlock()
 	f.s.wait = time.Second
 	result := make(chan *mcp.CallToolResult, 1)
-	go func() { result <- f.s.waitLocal(f.ctx, "TOKEN", fr) }()
+	go func() { result <- f.s.waitLocal(f.ctx, nil, "TOKEN", fr) }()
 	f.lifecycleCall("forget_secret", map[string]any{"name": "TOKEN"}, "forgotten")
 	select {
 	case res := <-result:
@@ -126,7 +202,7 @@ func TestLifecycleTerminalStates(t *testing.T) {
 				f.lifecycleCall("request_secret", map[string]any{"name": "DECLINED", "reason": "Test", "policy": stripePolicy}, "declined")
 				return
 			}
-			res := f.s.waitLocal(f.ctx, "TOKEN", &fillRequest{req: req})
+			res := f.s.waitLocal(f.ctx, nil, "TOKEN", &fillRequest{req: req})
 			expected := string(state)
 			if state == localpage.Rejected {
 				expected = "cancelled"
